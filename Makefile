@@ -30,7 +30,7 @@ DEBUG = YES
 CODE_SOURCERY=YES
 
 # Toolchain prefix (i.e arm-elf- -> arm-elf-gcc.exe)
-TCHAIN_PREFIX = /extra/scaudle/codesourcery/arm-2009q3/bin/arm-none-eabi-
+TCHAIN_PREFIX = arm-none-eabi-
 
 REMOVE_CMD = rm
 
