@@ -261,11 +261,11 @@ LDFLAGS +=-T$(LINKERSCRIPTPATH)/$(CHIP).ld
 #
 OOCD_LOADFILE+=$(OUTDIR)/$(TARGET).elf
 # if OpenOCD is in the $PATH just set OPENOCDEXE=openocd
-OOCD_EXE=openocd
+OOCD_EXE=/home/doceme/sandbox/openocd/bin/openocd
 # debug level
 OOCD_CL=-d0
 # interface and board/target settings (using the OOCD target-library here)
-OOCD_CL+=-f project/OpenOCD/olimex-arm-usb-tiny-h.cfg -f project/OpenOCD/stm32.cfg
+OOCD_CL+=-f openocd/openocd.cfg
 # initialize
 OOCD_CL+=-c init
 # show the targets
@@ -275,7 +275,7 @@ OOCD_CL+= -c "reset halt"
 # flash erase 
 OOCD_CL+=-c "stm32x mass_erase 0"
 # flash-write
-OOCD_CL+=-c "flash write_image $(OOCD_LOADFILE)" 
+OOCD_CL+=-c "flash write_image $(OOCD_LOADFILE)"
 # Verify
 OOCD_CL+=-c "verify_image $(OOCD_LOADFILE)"
 # reset target
