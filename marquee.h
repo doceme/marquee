@@ -43,4 +43,18 @@
 #include <stm32f10x.h>
 #include <stm32f10x_conf.h>
 
+//#define ENABLE_SPI
+
+#define SPI			SPI2
+#define SPI_CLK			RCC_APB1Periph_SPI2
+#define SPI_GPIO		GPIOB
+#define SPI_GPIO_CLK		RCC_APB2Periph_GPIOB
+#define SPI_PIN_CS		GPIO_Pin_12
+#define SPI_PIN_SCK		GPIO_Pin_13
+#define SPI_PIN_MISO		GPIO_Pin_14
+#define SPI_PIN_MOSI		GPIO_Pin_15
+#define SPI_MASTER_IRQn         SPI2_IRQn
+
+extern uint8_t ready;
+
 #endif /* MARQUEE_H */

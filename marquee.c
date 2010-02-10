@@ -30,20 +30,16 @@
 /* Definitions */
 #define TASK_SPIN_DELAY             (500 / portTICK_RATE_MS)
 #define NUMBER_OF_BEEPS             3
+#define SPI_CS_DELAY                10
 
-#define SPI					SPI2
-#define SPI_CLK				RCC_APB1Periph_SPI2
-#define SPI_GPIO			GPIOB
-#define SPI_GPIO_CLK		RCC_APB2Periph_GPIOB
-#define SPI_PIN_SCK			GPIO_Pin_13
-#define SPI_PIN_MISO		GPIO_Pin_14
-#define SPI_PIN_MOSI		GPIO_Pin_15
+#define ENABLE_DELAY
 
 #define BEEP(n)		do { beep_count = n; vTaskResume(xBuzzerTask); } while (0);
 
 /* Global Variables */
 static uint8_t beep_count = 0;
 static xTaskHandle xBuzzerTask = NULL;
+uint8_t ready = 0;
 
 /* Local Variables */
 
@@ -51,6 +47,13 @@ static xTaskHandle xBuzzerTask = NULL;
 static void TaskBuzzer(void *pvParameters);
 static void RCC_Configuration(void);
 static void GPIO_Configuration(void);
+#ifdef ENABLE_SPI
+static void NVIC_Configuration(void);
+static void SPI_Configuration(void);
+#endif
+static void LED_Configuration(void);
+static void LED_WriteCommand(uint8_t command);
+static void LED_WriteData(uint8_t address, uint8_t data);
 #ifdef ENABLE_DELAY
 static void Delay(__IO uint32_t nCount);
 #endif
@@ -70,6 +73,15 @@ int main()
 
 	/* GPIO configuration */
 	GPIO_Configuration();
+
+#ifdef ENABLE_SPI
+	/* NVIC configuration */
+	NVIC_Configuration();
+
+	SPI_Configuration();
+#endif
+	/* LED configuration */
+	LED_Configuration();
 
 	/* Time base configuration */
 	TIM_TimeBaseStructure.TIM_Period = 999;
@@ -120,14 +132,12 @@ void RCC_Configuration(void)
 	RCC_APB1PeriphClockCmd(RCC_APB1Periph_TIM3, ENABLE);
 
 	/* Enable GPIOC peripheral clock */
-	RCC_APB2PeriphClockCmd(RCC_APB2Periph_GPIOC | RCC_APB2Periph_AFIO, ENABLE);
+	RCC_APB2PeriphClockCmd(RCC_APB2Periph_GPIOC |
+				RCC_APB2Periph_GPIOB |
+				RCC_APB2Periph_AFIO,
+				ENABLE);
 
-
-#if ENABLE_SPI
-	/* Enable peripheral clocks --------------------------------------------------*/
-	/* Enable GPIO clock for SPI */
-	RCC_APB2PeriphClockCmd(SPI_GPIO_CLK | RCC_APB2Periph_AFIO, ENABLE);
-
+#ifdef ENABLE_SPI
 	/* Enable SPI2 Periph clock */
 	RCC_APB1PeriphClockCmd(SPI_CLK, ENABLE);
 #endif
@@ -142,6 +152,19 @@ void GPIO_Configuration(void)
 {
 	GPIO_InitTypeDef GPIO_InitStructure;
 
+	/* Initialize GPIOB */
+#ifndef ENABLE_SPI
+	GPIO_InitStructure.GPIO_Pin = GPIO_Pin_12 | GPIO_Pin_13 | GPIO_Pin_15;
+#else
+	GPIO_InitStructure.GPIO_Pin = SPI_PIN_CS;
+#endif
+	GPIO_InitStructure.GPIO_Speed = GPIO_Speed_50MHz;
+	GPIO_InitStructure.GPIO_Mode = GPIO_Mode_Out_PP;
+	GPIO_Init(GPIOB, &GPIO_InitStructure);
+#ifndef ENABLE_SPI
+	GPIO_SetBits(GPIOB, GPIO_Pin_12 | GPIO_Pin_13 | GPIO_Pin_15); // CS High
+#endif
+
 	/* Initialize GPIOC */
 	GPIO_InitStructure.GPIO_Pin = GPIO_Pin_6;
 	GPIO_InitStructure.GPIO_Speed = GPIO_Speed_50MHz;
@@ -150,24 +173,203 @@ void GPIO_Configuration(void)
 
 	GPIO_PinRemapConfig(GPIO_FullRemap_TIM3, ENABLE);
 
-#if ENABLE_SPI
-	/* Enable SPI Pins Software Remapping */
-	GPIO_PinRemapConfig(GPIO_Remap_SPI2, ENABLE);
-
+#ifdef ENABLE_SPI
 	/* Configure SPI pins: SCK, MISO and MOSI */
 	GPIO_InitStructure.GPIO_Pin = SPI_PIN_SCK | SPI_PIN_MISO | SPI_PIN_MOSI;
 	GPIO_InitStructure.GPIO_Speed = GPIO_Speed_50MHz;
 	GPIO_InitStructure.GPIO_Mode = GPIO_Mode_AF_PP;
 	GPIO_Init(SPI_GPIO, &GPIO_InitStructure);
+	GPIO_SetBits(SPI_GPIO, SPI_PIN_CS); // CS High
 #endif
 }
+
+/**
+  * @brief  Configure the nested vectored interrupt controller.
+  * @param  None
+  * @retval None
+  */
+void NVIC_Configuration(void)
+{
+  NVIC_InitTypeDef NVIC_InitStructure;
+
+  /* 1 bit for pre-emption priority, 3 bits for subpriority */
+  NVIC_PriorityGroupConfig(NVIC_PriorityGroup_1);
+
+  /* Configure and enable SPI_MASTER interrupt -------------------------------*/
+  NVIC_InitStructure.NVIC_IRQChannel = SPI_MASTER_IRQn;
+  NVIC_InitStructure.NVIC_IRQChannelPreemptionPriority = 1;
+  NVIC_InitStructure.NVIC_IRQChannelSubPriority = 2;
+  NVIC_InitStructure.NVIC_IRQChannelCmd = ENABLE;
+  NVIC_Init(&NVIC_InitStructure);
+}
+
+/**
+ * @brief  Configures LED marquee.
+ * @param  None
+ * @retval None
+ */
+void LED_Configuration(void)
+{
+	int i;
+	LED_WriteCommand(0x01);
+	Delay(400);
+	LED_WriteCommand(0x2c);
+	Delay(400);
+	LED_WriteCommand(0x03);
+	Delay(400);
+	LED_WriteCommand(0x08);
+	Delay(400);
+	LED_WriteCommand(0xaf);
+
+	for (i = 0x1f; i >= 0; i--)
+	{
+		LED_WriteData(i, 0xf);
+	}
+	for (i = 0x3f; i >= 0x20; i--)
+	{
+		LED_WriteData(i, 0xf);
+	}
+	for (i = 0x5f; i >= 0x40; i--)
+	{
+		LED_WriteData(i, 0xf);
+	}
+}
+
+/**
+ * @brief  Writes an LED command
+ * @param  None
+ * @retval None
+ */
+void LED_WriteCommand(uint8_t command)
+{
+#ifdef ENABLE_SPI
+	uint16_t spi_command = (0x8000 | (command << 5)) & 0xFFE0;
+
+	/* Wait for SPI_MASTER Tx buffer empty */
+	//while (SPI_I2S_GetFlagStatus(SPI, SPI_I2S_FLAG_TXE) == RESET);
+	while (!ready);
+	//GPIO_SetBits(SPI_GPIO, SPI_PIN_CS); // CS High
+	GPIO_ResetBits(SPI_GPIO, SPI_PIN_CS); // CS Low
+	SPI_I2S_SendData(SPI, spi_command);
+#else
+	int i;
+
+	Delay(SPI_CS_DELAY);
+	GPIO_ResetBits(GPIOB, GPIO_Pin_12); // CS Low
+	Delay(2 * SPI_CS_DELAY);
+	GPIO_ResetBits(GPIOB, GPIO_Pin_13);
+	Delay(SPI_CS_DELAY);
+	GPIO_SetBits(GPIOB, GPIO_Pin_15); // 1
+	Delay(SPI_CS_DELAY);
+	GPIO_SetBits(GPIOB, GPIO_Pin_13);
+	Delay(2 * SPI_CS_DELAY);
+	GPIO_ResetBits(GPIOB, GPIO_Pin_13);
+	Delay(SPI_CS_DELAY);
+	GPIO_ResetBits(GPIOB, GPIO_Pin_15); // 0
+	Delay(SPI_CS_DELAY);
+	GPIO_SetBits(GPIOB, GPIO_Pin_13);
+	Delay(2 * SPI_CS_DELAY);
+	GPIO_ResetBits(GPIOB, GPIO_Pin_13);
+	Delay(SPI_CS_DELAY);
+	GPIO_ResetBits(GPIOB, GPIO_Pin_15); // 0
+	Delay(SPI_CS_DELAY);
+	GPIO_SetBits(GPIOB, GPIO_Pin_13);
+
+	for (i = 7; i >= 0; i--)
+	{
+		Delay(2 * SPI_CS_DELAY);
+		GPIO_ResetBits(GPIOB, GPIO_Pin_13);
+		Delay(SPI_CS_DELAY);
+		GPIO_WriteBit(GPIOB, GPIO_Pin_15, ((command >> i) & 0x01));
+		Delay(SPI_CS_DELAY);
+		GPIO_SetBits(GPIOB, GPIO_Pin_13);
+	}
+
+	Delay(2 * SPI_CS_DELAY);
+	GPIO_ResetBits(GPIOB, GPIO_Pin_13); // 0
+	Delay(SPI_CS_DELAY);
+	GPIO_ResetBits(GPIOB, GPIO_Pin_15);
+	Delay(SPI_CS_DELAY);
+	GPIO_SetBits(GPIOB, GPIO_Pin_13);
+	Delay(2 * SPI_CS_DELAY);
+	GPIO_SetBits(GPIOB, GPIO_Pin_12 | GPIO_Pin_15); // CS High
+	Delay(SPI_CS_DELAY);
+#endif
+}
+
+/**
+ * @brief  Writes LED data
+ * @param  None
+ * @retval None
+ */
+void LED_WriteData(uint8_t address, uint8_t data)
+{
+#ifdef ENABLE_SPI
+	uint16_t spi_command = (0x8000 | (command << 5)) & 0xFFE0;
+
+	/* Wait for SPI_MASTER Tx buffer empty */
+	//while (SPI_I2S_GetFlagStatus(SPI, SPI_I2S_FLAG_TXE) == RESET);
+	while (!ready);
+	//GPIO_SetBits(SPI_GPIO, SPI_PIN_CS); // CS High
+	GPIO_ResetBits(SPI_GPIO, SPI_PIN_CS); // CS Low
+	SPI_I2S_SendData(SPI, spi_command);
+#else
+	int i;
+
+	Delay(SPI_CS_DELAY);
+	GPIO_ResetBits(GPIOB, GPIO_Pin_12); // CS Low
+	Delay(2 * SPI_CS_DELAY);
+	GPIO_ResetBits(GPIOB, GPIO_Pin_13);
+	Delay(SPI_CS_DELAY);
+	GPIO_SetBits(GPIOB, GPIO_Pin_15); // 1
+	Delay(SPI_CS_DELAY);
+	GPIO_SetBits(GPIOB, GPIO_Pin_13);
+	Delay(2 * SPI_CS_DELAY);
+	GPIO_ResetBits(GPIOB, GPIO_Pin_13);
+	Delay(SPI_CS_DELAY);
+	GPIO_ResetBits(GPIOB, GPIO_Pin_15); // 0
+	Delay(SPI_CS_DELAY);
+	GPIO_SetBits(GPIOB, GPIO_Pin_13);
+	Delay(2 * SPI_CS_DELAY);
+	GPIO_ResetBits(GPIOB, GPIO_Pin_13);
+	Delay(SPI_CS_DELAY);
+	GPIO_SetBits(GPIOB, GPIO_Pin_15); // 1
+	Delay(SPI_CS_DELAY);
+	GPIO_SetBits(GPIOB, GPIO_Pin_13);
+
+	for (i = 6; i >= 0; i--)
+	{
+		Delay(2 * SPI_CS_DELAY);
+		GPIO_ResetBits(GPIOB, GPIO_Pin_13);
+		Delay(SPI_CS_DELAY);
+		GPIO_WriteBit(GPIOB, GPIO_Pin_15, ((address >> i) & 0x01));
+		Delay(SPI_CS_DELAY);
+		GPIO_SetBits(GPIOB, GPIO_Pin_13);
+	}
+
+	for (i = 3; i >= 0; i--)
+	{
+		Delay(2 * SPI_CS_DELAY);
+		GPIO_ResetBits(GPIOB, GPIO_Pin_13);
+		Delay(SPI_CS_DELAY);
+		GPIO_WriteBit(GPIOB, GPIO_Pin_15, ((data >> i) & 0x01));
+		Delay(SPI_CS_DELAY);
+		GPIO_SetBits(GPIOB, GPIO_Pin_13);
+	}
+
+	Delay(2 * SPI_CS_DELAY);
+	GPIO_SetBits(GPIOB, GPIO_Pin_12 | GPIO_Pin_15); // CS High
+	Delay(SPI_CS_DELAY);
+#endif
+}
+
 
 /**
  * @brief  Configures the different SPI ports.
  * @param  None
  * @retval None
  */
-#if ENABLE_SPI
+#ifdef ENABLE_SPI
 void SPI_Configuration(void)
 {
 	SPI_InitTypeDef SPI_InitStructure;
@@ -175,14 +377,21 @@ void SPI_Configuration(void)
 	/* SPI_MASTER configuration */
 	SPI_InitStructure.SPI_Direction = SPI_Direction_1Line_Tx;
 	SPI_InitStructure.SPI_Mode = SPI_Mode_Master;
-	SPI_InitStructure.SPI_DataSize = SPI_DataSize_8b;
+	SPI_InitStructure.SPI_DataSize = SPI_DataSize_16b;
 	SPI_InitStructure.SPI_CPOL = SPI_CPOL_High;
 	SPI_InitStructure.SPI_CPHA = SPI_CPHA_2Edge;
 	SPI_InitStructure.SPI_NSS = SPI_NSS_Soft;
-	SPI_InitStructure.SPI_BaudRatePrescaler = SPI_BaudRatePrescaler_4;
+	SPI_InitStructure.SPI_BaudRatePrescaler = SPI_BaudRatePrescaler_128;
 	SPI_InitStructure.SPI_FirstBit = SPI_FirstBit_MSB;
 	SPI_InitStructure.SPI_CRCPolynomial = 7;
-	SPI_Init(SPI_MASTER, &SPI_InitStructure);
+
+	SPI_Init(SPI, &SPI_InitStructure);
+
+	/* Enable SPI_MASTER TXE interrupt */
+	SPI_I2S_ITConfig(SPI, SPI_I2S_IT_TXE, ENABLE);
+
+	/* Enable SPI */
+	SPI_Cmd(SPI, ENABLE);
 }
 #endif
 
@@ -226,12 +435,6 @@ void TaskBuzzer(void *pvParameters)
 */
 void vApplicationIdleHook(void)
 {
-	static uint8_t once = 1;
-
-	if (once)
-	{
-		once = 0;
-	}
 	/* Called when the scheduler has no tasks to run */
 }
 

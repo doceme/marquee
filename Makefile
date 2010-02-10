@@ -72,6 +72,7 @@ RTOSINCDIR = $(RTOSDIR)/include
 
 ## MARQUEE:
 SRC =  $(TARGET).c
+SRC += stm32f10x_it.c
 
 ## CMSIS for STM32
 SRC += $(CMSISDIR)/core_cm3.c
