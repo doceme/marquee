@@ -369,6 +369,23 @@ register char   *a;
 }
 #endif
 
+caddr_t _sbrk(int incr) {
+	extern char _end;		/* Defined by the linker */
+	static char *heap_end;
+	char *prev_heap_end;
+
+	if (heap_end == 0) {
+		heap_end = &_end;
+	}
+	register caddr_t stack_ptr asm ("sp");
+	prev_heap_end = heap_end;
+	if (heap_end + incr > stack_ptr) {
+		while(1);
+	}
+
+	heap_end += incr;
+	return (caddr_t) prev_heap_end;
+}
 /**
  * @brief  Configures LED marquee.
  * @param  None
@@ -524,6 +541,7 @@ void LED_WriteData(uint8_t address, uint8_t data)
 	SPI_CS_HIGH;
 }
 
+#if 0
 itoa(i, a)
 	register int    i;
 	register char   *a;
@@ -549,6 +567,7 @@ itoa(i, a)
 	} while (*j);
 	return (0);
 }
+#endif
 
 /**
  * @brief  Updates all the LEDs
@@ -579,7 +598,7 @@ void LED_SetLine(uint8_t line, const char *str)
 #if 1
 			static char test[80];
 			char *ch = test;
-			itoa(*str, test);
+			siprintf(test, "%d", 1234);
 			while (*ch != '\0')
 			{
 				while(USART_GetFlagStatus(USART1, USART_FLAG_TXE) == RESET);

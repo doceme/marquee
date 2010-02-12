@@ -25,7 +25,7 @@
 
 # Set developer code and compile options
 # Set to YES for debugging
-DEBUG = YES
+DEBUG = NO
 # Set to YES when using Code Sourcery toolchain
 CODE_SOURCERY=YES
 
@@ -251,7 +251,7 @@ LDFLAGS += $(patsubst %,-L%,$(EXTRA_LIBDIRS))
 LDFLAGS += -lc
 LDFLAGS += $(patsubst %,-l%,$(EXTRA_LIBS))
 LDFLAGS += $(MATH_LIB)
-LDFLAGS += -lc -lgcc 
+LDFLAGS += -lc -lgcc
 
 # Set linker-script name depending on selected submodel name
 LDFLAGS +=-T$(LINKERSCRIPTPATH)/$(CHIP).ld
