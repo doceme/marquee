@@ -26,43 +26,163 @@
 
 /* Project Includes */
 #include "marquee.h"
+#include <stdio.h>
 
 /* Definitions */
-#define TASK_SPIN_DELAY             (500 / portTICK_RATE_MS)
-#define NUMBER_OF_BEEPS             3
-#define SPI_CS_DELAY                10
+#define TASK_SPIN_DELAY		(500 / portTICK_RATE_MS)
+#define NUMBER_OF_BEEPS		3
+#define SPI_CS_DELAY		10
+#define LED_VALUE		0xa
+#define LED_BUFFER_SIZE		24
 
-#define ENABLE_DELAY
+#define MAX_CHARS_5X7		6
 
 #define BEEP(n)		do { beep_count = n; vTaskResume(xBuzzerTask); } while (0);
 
+#define SPI_CS_LOW	while (SPI_I2S_GetFlagStatus(SPI, SPI_I2S_FLAG_TXE) == RESET); \
+				GPIO_ResetBits(SPI_GPIO, SPI_PIN_CS);
+#define SPI_CS_HIGH	while (SPI_I2S_GetFlagStatus(SPI, SPI_I2S_FLAG_BSY) == SET); \
+				GPIO_SetBits(SPI_GPIO, SPI_PIN_CS);
+
 /* Global Variables */
-static uint8_t beep_count = 0;
-static xTaskHandle xBuzzerTask = NULL;
 uint8_t ready = 0;
 
 /* Local Variables */
+static uint8_t beep_count = 0;
+static xTaskHandle xBuzzerTask = NULL;
+static uint8_t line1[LED_BUFFER_SIZE];
+static uint8_t line2[LED_BUFFER_SIZE];
+
+// 5x7 Font Table
+// ASCII characters 0x20-0x7F (32-127)
+static const unsigned char font5x7[] = {
+        0x00, 0x00, 0x00, 0x00, 0x00,// (space)
+        0x00, 0x00, 0x5F, 0x00, 0x00,// !
+        0x00, 0x07, 0x00, 0x07, 0x00,// "
+        0x14, 0x7F, 0x14, 0x7F, 0x14,// #
+        0x24, 0x2A, 0x7F, 0x2A, 0x12,// $
+        0x23, 0x13, 0x08, 0x64, 0x62,// %
+        0x36, 0x49, 0x55, 0x22, 0x50,// &
+        0x00, 0x05, 0x03, 0x00, 0x00,// '
+        0x00, 0x1C, 0x22, 0x41, 0x00,// (
+        0x00, 0x41, 0x22, 0x1C, 0x00,// )
+        0x08, 0x2A, 0x1C, 0x2A, 0x08,// *
+        0x08, 0x08, 0x3E, 0x08, 0x08,// +
+        0x00, 0x50, 0x30, 0x00, 0x00,// ,
+        0x08, 0x08, 0x08, 0x08, 0x08,// -
+        0x00, 0x60, 0x60, 0x00, 0x00,// .
+        0x20, 0x10, 0x08, 0x04, 0x02,// /
+        0x3E, 0x51, 0x49, 0x45, 0x3E,// 0
+        0x00, 0x42, 0x7F, 0x40, 0x00,// 1
+        0x42, 0x61, 0x51, 0x49, 0x46,// 2
+        0x21, 0x41, 0x45, 0x4B, 0x31,// 3
+        0x18, 0x14, 0x12, 0x7F, 0x10,// 4
+        0x27, 0x45, 0x45, 0x45, 0x39,// 5
+        0x3C, 0x4A, 0x49, 0x49, 0x30,// 6
+        0x01, 0x71, 0x09, 0x05, 0x03,// 7
+        0x36, 0x49, 0x49, 0x49, 0x36,// 8
+        0x06, 0x49, 0x49, 0x29, 0x1E,// 9
+        0x00, 0x36, 0x36, 0x00, 0x00,// :
+        0x00, 0x56, 0x36, 0x00, 0x00,// ;
+        0x00, 0x08, 0x14, 0x22, 0x41,// <
+        0x14, 0x14, 0x14, 0x14, 0x14,// =
+        0x41, 0x22, 0x14, 0x08, 0x00,// >
+        0x02, 0x01, 0x51, 0x09, 0x06,// ?
+        0x32, 0x49, 0x79, 0x41, 0x3E,// @
+        0x7E, 0x11, 0x11, 0x11, 0x7E,// A
+        0x7F, 0x49, 0x49, 0x49, 0x36,// B
+        0x3E, 0x41, 0x41, 0x41, 0x22,// C
+        0x7F, 0x41, 0x41, 0x22, 0x1C,// D
+        0x7F, 0x49, 0x49, 0x49, 0x41,// E
+        0x7F, 0x09, 0x09, 0x01, 0x01,// F
+        0x3E, 0x41, 0x41, 0x51, 0x32,// G
+        0x7F, 0x08, 0x08, 0x08, 0x7F,// H
+        0x00, 0x41, 0x7F, 0x41, 0x00,// I
+        0x20, 0x40, 0x41, 0x3F, 0x01,// J
+        0x7F, 0x08, 0x14, 0x22, 0x41,// K
+        0x7F, 0x40, 0x40, 0x40, 0x40,// L
+        0x7F, 0x02, 0x04, 0x02, 0x7F,// M
+        0x7F, 0x04, 0x08, 0x10, 0x7F,// N
+        0x3E, 0x41, 0x41, 0x41, 0x3E,// O
+        0x7F, 0x09, 0x09, 0x09, 0x06,// P
+        0x3E, 0x41, 0x51, 0x21, 0x5E,// Q
+        0x7F, 0x09, 0x19, 0x29, 0x46,// R
+        0x46, 0x49, 0x49, 0x49, 0x31,// S
+        0x01, 0x01, 0x7F, 0x01, 0x01,// T
+        0x3F, 0x40, 0x40, 0x40, 0x3F,// U
+        0x1F, 0x20, 0x40, 0x20, 0x1F,// V
+        0x7F, 0x20, 0x18, 0x20, 0x7F,// W
+        0x63, 0x14, 0x08, 0x14, 0x63,// X
+        0x03, 0x04, 0x78, 0x04, 0x03,// Y
+        0x61, 0x51, 0x49, 0x45, 0x43,// Z
+        0x00, 0x00, 0x7F, 0x41, 0x41,// [
+        0x02, 0x04, 0x08, 0x10, 0x20,// "\"
+        0x41, 0x41, 0x7F, 0x00, 0x00,// ]
+        0x04, 0x02, 0x01, 0x02, 0x04,// ^
+        0x40, 0x40, 0x40, 0x40, 0x40,// _
+        0x00, 0x01, 0x02, 0x04, 0x00,// `
+        0x20, 0x54, 0x54, 0x54, 0x78,// a
+        0x7F, 0x48, 0x44, 0x44, 0x38,// b
+        0x38, 0x44, 0x44, 0x44, 0x20,// c
+        0x38, 0x44, 0x44, 0x48, 0x7F,// d
+        0x38, 0x54, 0x54, 0x54, 0x18,// e
+        0x08, 0x7E, 0x09, 0x01, 0x02,// f
+        0x08, 0x14, 0x54, 0x54, 0x3C,// g
+        0x7F, 0x08, 0x04, 0x04, 0x78,// h
+        0x00, 0x44, 0x7D, 0x40, 0x00,// i
+        0x20, 0x40, 0x44, 0x3D, 0x00,// j
+        0x00, 0x7F, 0x10, 0x28, 0x44,// k
+        0x00, 0x41, 0x7F, 0x40, 0x00,// l
+        0x7C, 0x04, 0x18, 0x04, 0x78,// m
+        0x7C, 0x08, 0x04, 0x04, 0x78,// n
+        0x38, 0x44, 0x44, 0x44, 0x38,// o
+        0x7C, 0x14, 0x14, 0x14, 0x08,// p
+        0x08, 0x14, 0x14, 0x18, 0x7C,// q
+        0x7C, 0x08, 0x04, 0x04, 0x08,// r
+        0x48, 0x54, 0x54, 0x54, 0x20,// s
+        0x04, 0x3F, 0x44, 0x40, 0x20,// t
+        0x3C, 0x40, 0x40, 0x20, 0x7C,// u
+        0x1C, 0x20, 0x40, 0x20, 0x1C,// v
+        0x3C, 0x40, 0x30, 0x40, 0x3C,// w
+        0x44, 0x28, 0x10, 0x28, 0x44,// x
+        0x0C, 0x50, 0x50, 0x50, 0x3C,// y
+        0x44, 0x64, 0x54, 0x4C, 0x44,// z
+        0x00, 0x08, 0x36, 0x41, 0x00,// {
+        0x00, 0x00, 0x7F, 0x00, 0x00,// |
+        0x00, 0x41, 0x36, 0x08, 0x00,// }
+        0x08, 0x08, 0x2A, 0x1C, 0x08,// ->
+        0x08, 0x1C, 0x2A, 0x08, 0x08 // <-
+};
 
 /* Function Prototypes */
 static void TaskBuzzer(void *pvParameters);
 static void RCC_Configuration(void);
 static void GPIO_Configuration(void);
-#ifdef ENABLE_SPI
-static void NVIC_Configuration(void);
+//static void NVIC_Configuration(void);
 static void SPI_Configuration(void);
-#endif
 static void LED_Configuration(void);
 static void LED_WriteCommand(uint8_t command);
 static void LED_WriteData(uint8_t address, uint8_t data);
+static void LED_Update(void);
+static void LED_SetLine(uint8_t line, const char *str);
 #ifdef ENABLE_DELAY
 static void Delay(__IO uint32_t nCount);
 #endif
+
+#ifdef __GNUC__
+  /* With GCC/RAISONANCE, small printf (option LD Linker->Libraries->Small printf
+     set to 'Yes') calls __io_putchar() */
+  #define PUTCHAR_PROTOTYPE int __io_putchar(int ch)
+#else
+  #define PUTCHAR_PROTOTYPE int fputc(int ch, FILE *f)
+#endif /* __GNUC__ */
 
 /**
  * Main function
  */
 int main()
 {
+	USART_InitTypeDef USART_InitStructure;
 
 	TIM_TimeBaseInitTypeDef  TIM_TimeBaseStructure;
 	TIM_OCInitTypeDef  TIM_OCInitStructure;
@@ -74,13 +194,25 @@ int main()
 	/* GPIO configuration */
 	GPIO_Configuration();
 
-#ifdef ENABLE_SPI
 	/* NVIC configuration */
-	NVIC_Configuration();
+	//NVIC_Configuration();
 
 	SPI_Configuration();
-#endif
 	/* LED configuration */
+
+	USART_InitStructure.USART_BaudRate = 115200;
+	USART_InitStructure.USART_WordLength = USART_WordLength_8b;
+	USART_InitStructure.USART_StopBits = USART_StopBits_1;
+	USART_InitStructure.USART_Parity = USART_Parity_No;
+	USART_InitStructure.USART_HardwareFlowControl = USART_HardwareFlowControl_None;
+	USART_InitStructure.USART_Mode = USART_Mode_Rx | USART_Mode_Tx;
+
+	/* USART configuration */
+	USART_Init(USART1, &USART_InitStructure);
+
+	/* Enable USART */
+	USART_Cmd(USART1, ENABLE);
+
 	LED_Configuration();
 
 	/* Time base configuration */
@@ -132,15 +264,15 @@ void RCC_Configuration(void)
 	RCC_APB1PeriphClockCmd(RCC_APB1Periph_TIM3, ENABLE);
 
 	/* Enable GPIOC peripheral clock */
-	RCC_APB2PeriphClockCmd(RCC_APB2Periph_GPIOC |
+	RCC_APB2PeriphClockCmd(RCC_APB2Periph_GPIOA |
+				RCC_APB2Periph_GPIOC |
 				RCC_APB2Periph_GPIOB |
+				RCC_APB2Periph_USART1 |
 				RCC_APB2Periph_AFIO,
 				ENABLE);
 
-#ifdef ENABLE_SPI
 	/* Enable SPI2 Periph clock */
 	RCC_APB1PeriphClockCmd(SPI_CLK, ENABLE);
-#endif
 }
 
 /**
@@ -153,17 +285,10 @@ void GPIO_Configuration(void)
 	GPIO_InitTypeDef GPIO_InitStructure;
 
 	/* Initialize GPIOB */
-#ifndef ENABLE_SPI
-	GPIO_InitStructure.GPIO_Pin = GPIO_Pin_12 | GPIO_Pin_13 | GPIO_Pin_15;
-#else
 	GPIO_InitStructure.GPIO_Pin = SPI_PIN_CS;
-#endif
 	GPIO_InitStructure.GPIO_Speed = GPIO_Speed_50MHz;
 	GPIO_InitStructure.GPIO_Mode = GPIO_Mode_Out_PP;
 	GPIO_Init(GPIOB, &GPIO_InitStructure);
-#ifndef ENABLE_SPI
-	GPIO_SetBits(GPIOB, GPIO_Pin_12 | GPIO_Pin_13 | GPIO_Pin_15); // CS High
-#endif
 
 	/* Initialize GPIOC */
 	GPIO_InitStructure.GPIO_Pin = GPIO_Pin_6;
@@ -173,16 +298,26 @@ void GPIO_Configuration(void)
 
 	GPIO_PinRemapConfig(GPIO_FullRemap_TIM3, ENABLE);
 
-#ifdef ENABLE_SPI
 	/* Configure SPI pins: SCK, MISO and MOSI */
 	GPIO_InitStructure.GPIO_Pin = SPI_PIN_SCK | SPI_PIN_MISO | SPI_PIN_MOSI;
 	GPIO_InitStructure.GPIO_Speed = GPIO_Speed_50MHz;
 	GPIO_InitStructure.GPIO_Mode = GPIO_Mode_AF_PP;
 	GPIO_Init(SPI_GPIO, &GPIO_InitStructure);
 	GPIO_SetBits(SPI_GPIO, SPI_PIN_CS); // CS High
-#endif
+
+	/* Configure USART Tx as alternate function push-pull */
+	GPIO_InitStructure.GPIO_Pin = GPIO_Pin_9;
+	GPIO_InitStructure.GPIO_Mode = GPIO_Mode_AF_PP;
+	GPIO_InitStructure.GPIO_Speed = GPIO_Speed_50MHz;
+	GPIO_Init(GPIOA, &GPIO_InitStructure);
+
+	/* Configure USART Rx as input floating */
+	GPIO_InitStructure.GPIO_Pin = GPIO_Pin_10;
+	GPIO_InitStructure.GPIO_Mode = GPIO_Mode_IN_FLOATING;
+	GPIO_Init(GPIOA, &GPIO_InitStructure);
 }
 
+#if 0
 /**
   * @brief  Configure the nested vectored interrupt controller.
   * @param  None
@@ -202,6 +337,37 @@ void NVIC_Configuration(void)
   NVIC_InitStructure.NVIC_IRQChannelCmd = ENABLE;
   NVIC_Init(&NVIC_InitStructure);
 }
+#endif
+
+#define INT_DIGITS 19           /* enough for 64 bit integer */
+
+#if 0
+itoa(i, a)
+register int    i;
+register char   *a;
+{
+	register char   *j;
+	char            b[6];
+
+	if (i < 0)
+	{
+		*a++ = '-';
+		i = -i;
+	}
+	j = &b[5];
+	*j-- = 0;
+	do
+	{
+		*j-- = i % 10 + '0';
+		i /= 10;
+	} while (i);
+	do
+	{
+		*a++ = *++j;
+	} while (*j);
+	return (0);
+}
+#endif
 
 /**
  * @brief  Configures LED marquee.
@@ -211,28 +377,121 @@ void NVIC_Configuration(void)
 void LED_Configuration(void)
 {
 	int i;
+	//int j;
+	//int8_t c = 'T';
 	LED_WriteCommand(0x01);
-	Delay(400);
-	LED_WriteCommand(0x2c);
-	Delay(400);
 	LED_WriteCommand(0x03);
-	Delay(400);
-	LED_WriteCommand(0x08);
-	Delay(400);
+	LED_WriteCommand(0x2c);
 	LED_WriteCommand(0xaf);
 
-	for (i = 0x1f; i >= 0; i--)
+	for (i = 0; i < 96; i++)
 	{
-		LED_WriteData(i, 0xf);
+		LED_WriteData(i, 0x0);
 	}
-	for (i = 0x3f; i >= 0x20; i--)
+
+	LED_SetLine(0, "Test");
+
+#if 0
+	for (i = 0; i < LED_BUFFER_SIZE; i++)
 	{
-		LED_WriteData(i, 0xf);
+		line1[i] = 0xaa;
+		line2[i] = 0xff;
 	}
-	for (i = 0x5f; i >= 0x40; i--)
+	//LED_SetLine(0, "Test");
+	i = 0;
+	uint32_t index = ('T' - ' ') * 5;
+	//char test[] = "test";
+	char *ch = itoa(index);
+	//char *ch = test;
+	while (*ch != '\0')
 	{
-		LED_WriteData(i, 0xf);
+		while(USART_GetFlagStatus(USART1, USART_FLAG_TXE) == RESET);
+		USART_SendData(USART1, *ch++);
 	}
+
+		while(USART_GetFlagStatus(USART1, USART_FLAG_TXE) == RESET);
+		USART_SendData(USART1, ' ');
+
+	ch = itoa(font5x7[index]);
+	//char *ch = test;
+	while (*ch != '\0')
+	{
+		while(USART_GetFlagStatus(USART1, USART_FLAG_TXE) == RESET);
+		USART_SendData(USART1, *ch++);
+	}
+	for (i = 0; i < index; i++)
+	{
+		USART_SendData(USART1, '1');
+		/* Wait the byte is entirely sent to USART1 */  
+		while(USART_GetFlagStatus(USART1, USART_FLAG_TXE) == RESET);
+	}
+
+	//uint8_t index = (c - (int8_t)' ');
+	//uint8_t index = 5;
+	line1[i++] = font5x7[index];
+	line1[i++] = font5x7[index + 1];
+	line1[i++] = font5x7[index + 2];
+	line1[i++] = font5x7[index + 3];
+	line1[i++] = font5x7[index + 4];
+	i++;
+
+	index = 10;
+
+	line1[i++] = font5x7[index];
+	line1[i++] = font5x7[index + 1];
+	line1[i++] = font5x7[index + 2];
+	line1[i++] = font5x7[index + 3];
+	line1[i++] = font5x7[index + 4];
+	i++;
+
+	index = 15;
+
+	line1[i++] = font5x7[index];
+	line1[i++] = font5x7[index + 1];
+	line1[i++] = font5x7[index + 2];
+	line1[i++] = font5x7[index + 3];
+	line1[i++] = font5x7[index + 4];
+	i++;
+
+	index = 20;
+
+	line1[i++] = font5x7[index];
+	line1[i++] = font5x7[index + 1];
+	line1[i++] = font5x7[index + 2];
+	line1[i++] = font5x7[index + 3];
+	line1[i++] = font5x7[index + 4];
+	i++;
+
+
+	i = 0;
+	j = 0;
+	line1[i++] = font5x7[j++];
+	line1[i++] = font5x7[j++];
+	line1[i++] = font5x7[j++];
+	line1[i++] = font5x7[j++];
+	line1[i++] = font5x7[j++];
+	i++;
+	line1[i++] = font5x7[j++];
+	line1[i++] = font5x7[j++];
+	line1[i++] = font5x7[j++];
+	line1[i++] = font5x7[j++];
+	line1[i++] = font5x7[j++];
+	i++;
+	line1[i++] = font5x7[j++];
+	line1[i++] = font5x7[j++];
+	line1[i++] = font5x7[j++];
+	line1[i++] = font5x7[j++];
+	line1[i++] = font5x7[j++];
+	i++;
+	line1[i++] = font5x7[j++];
+	line1[i++] = font5x7[j++];
+	line1[i++] = font5x7[j++];
+	line1[i++] = font5x7[j++];
+	line1[i++] = font5x7[j++];
+	i++;
+#endif
+
+	LED_Update();
 }
 
 /**
@@ -242,59 +501,12 @@ void LED_Configuration(void)
  */
 void LED_WriteCommand(uint8_t command)
 {
-#ifdef ENABLE_SPI
 	uint16_t spi_command = (0x8000 | (command << 5)) & 0xFFE0;
 
 	/* Wait for SPI_MASTER Tx buffer empty */
-	//while (SPI_I2S_GetFlagStatus(SPI, SPI_I2S_FLAG_TXE) == RESET);
-	while (!ready);
-	//GPIO_SetBits(SPI_GPIO, SPI_PIN_CS); // CS High
-	GPIO_ResetBits(SPI_GPIO, SPI_PIN_CS); // CS Low
+	SPI_CS_LOW;
 	SPI_I2S_SendData(SPI, spi_command);
-#else
-	int i;
-
-	Delay(SPI_CS_DELAY);
-	GPIO_ResetBits(GPIOB, GPIO_Pin_12); // CS Low
-	Delay(2 * SPI_CS_DELAY);
-	GPIO_ResetBits(GPIOB, GPIO_Pin_13);
-	Delay(SPI_CS_DELAY);
-	GPIO_SetBits(GPIOB, GPIO_Pin_15); // 1
-	Delay(SPI_CS_DELAY);
-	GPIO_SetBits(GPIOB, GPIO_Pin_13);
-	Delay(2 * SPI_CS_DELAY);
-	GPIO_ResetBits(GPIOB, GPIO_Pin_13);
-	Delay(SPI_CS_DELAY);
-	GPIO_ResetBits(GPIOB, GPIO_Pin_15); // 0
-	Delay(SPI_CS_DELAY);
-	GPIO_SetBits(GPIOB, GPIO_Pin_13);
-	Delay(2 * SPI_CS_DELAY);
-	GPIO_ResetBits(GPIOB, GPIO_Pin_13);
-	Delay(SPI_CS_DELAY);
-	GPIO_ResetBits(GPIOB, GPIO_Pin_15); // 0
-	Delay(SPI_CS_DELAY);
-	GPIO_SetBits(GPIOB, GPIO_Pin_13);
-
-	for (i = 7; i >= 0; i--)
-	{
-		Delay(2 * SPI_CS_DELAY);
-		GPIO_ResetBits(GPIOB, GPIO_Pin_13);
-		Delay(SPI_CS_DELAY);
-		GPIO_WriteBit(GPIOB, GPIO_Pin_15, ((command >> i) & 0x01));
-		Delay(SPI_CS_DELAY);
-		GPIO_SetBits(GPIOB, GPIO_Pin_13);
-	}
-
-	Delay(2 * SPI_CS_DELAY);
-	GPIO_ResetBits(GPIOB, GPIO_Pin_13); // 0
-	Delay(SPI_CS_DELAY);
-	GPIO_ResetBits(GPIOB, GPIO_Pin_15);
-	Delay(SPI_CS_DELAY);
-	GPIO_SetBits(GPIOB, GPIO_Pin_13);
-	Delay(2 * SPI_CS_DELAY);
-	GPIO_SetBits(GPIOB, GPIO_Pin_12 | GPIO_Pin_15); // CS High
-	Delay(SPI_CS_DELAY);
-#endif
+	SPI_CS_HIGH;
 }
 
 /**
@@ -304,63 +516,154 @@ void LED_WriteCommand(uint8_t command)
  */
 void LED_WriteData(uint8_t address, uint8_t data)
 {
-#ifdef ENABLE_SPI
-	uint16_t spi_command = (0x8000 | (command << 5)) & 0xFFE0;
+	uint16_t spi_command = (0xa000 | ((address & 0x7F) << 6) | ((data & 0xF) << 2)) & 0xFFFC;
 
 	/* Wait for SPI_MASTER Tx buffer empty */
-	//while (SPI_I2S_GetFlagStatus(SPI, SPI_I2S_FLAG_TXE) == RESET);
-	while (!ready);
-	//GPIO_SetBits(SPI_GPIO, SPI_PIN_CS); // CS High
-	GPIO_ResetBits(SPI_GPIO, SPI_PIN_CS); // CS Low
+	SPI_CS_LOW;
 	SPI_I2S_SendData(SPI, spi_command);
-#else
-	int i;
+	SPI_CS_HIGH;
+}
 
-	Delay(SPI_CS_DELAY);
-	GPIO_ResetBits(GPIOB, GPIO_Pin_12); // CS Low
-	Delay(2 * SPI_CS_DELAY);
-	GPIO_ResetBits(GPIOB, GPIO_Pin_13);
-	Delay(SPI_CS_DELAY);
-	GPIO_SetBits(GPIOB, GPIO_Pin_15); // 1
-	Delay(SPI_CS_DELAY);
-	GPIO_SetBits(GPIOB, GPIO_Pin_13);
-	Delay(2 * SPI_CS_DELAY);
-	GPIO_ResetBits(GPIOB, GPIO_Pin_13);
-	Delay(SPI_CS_DELAY);
-	GPIO_ResetBits(GPIOB, GPIO_Pin_15); // 0
-	Delay(SPI_CS_DELAY);
-	GPIO_SetBits(GPIOB, GPIO_Pin_13);
-	Delay(2 * SPI_CS_DELAY);
-	GPIO_ResetBits(GPIOB, GPIO_Pin_13);
-	Delay(SPI_CS_DELAY);
-	GPIO_SetBits(GPIOB, GPIO_Pin_15); // 1
-	Delay(SPI_CS_DELAY);
-	GPIO_SetBits(GPIOB, GPIO_Pin_13);
+itoa(i, a)
+	register int    i;
+	register char   *a;
+{
+	register char   *j;
+	char            b[6];
 
-	for (i = 6; i >= 0; i--)
+	if (i < 0)
 	{
-		Delay(2 * SPI_CS_DELAY);
-		GPIO_ResetBits(GPIOB, GPIO_Pin_13);
-		Delay(SPI_CS_DELAY);
-		GPIO_WriteBit(GPIOB, GPIO_Pin_15, ((address >> i) & 0x01));
-		Delay(SPI_CS_DELAY);
-		GPIO_SetBits(GPIOB, GPIO_Pin_13);
+		*a++ = '-';
+		i = -i;
 	}
-
-	for (i = 3; i >= 0; i--)
+	j = &b[5];
+	*j-- = 0;
+	do
 	{
-		Delay(2 * SPI_CS_DELAY);
-		GPIO_ResetBits(GPIOB, GPIO_Pin_13);
-		Delay(SPI_CS_DELAY);
-		GPIO_WriteBit(GPIOB, GPIO_Pin_15, ((data >> i) & 0x01));
-		Delay(SPI_CS_DELAY);
-		GPIO_SetBits(GPIOB, GPIO_Pin_13);
-	}
+		*j-- = i % 10 + '0';
+		i /= 10;
+	} while (i);
+	do
+	{
+		*a++ = *++j;
+	} while (*j);
+	return (0);
+}
 
-	Delay(2 * SPI_CS_DELAY);
-	GPIO_SetBits(GPIOB, GPIO_Pin_12 | GPIO_Pin_15); // CS High
-	Delay(SPI_CS_DELAY);
+/**
+ * @brief  Updates all the LEDs
+ * @param  None
+ * @retval None
+ */
+void LED_SetLine(uint8_t line, const char *str)
+{
+	uint8_t *buffer = line ? line2 : line1;
+
+	/* Clear the line */
+	memset(buffer, 0, LED_BUFFER_SIZE);
+
+	if (str != NULL)
+	{
+		uint8_t i = 0;
+
+		while ((*str != 0) && (i < 24))
+		{
+			uint32_t value;
+			int k = (*str - 32);
+			if (k < 32 || k > 127)
+			{
+				k = 0;
+			}
+			k *= 5;
+
+#if 1
+			static char test[80];
+			char *ch = test;
+			itoa(*str, test);
+			while (*ch != '\0')
+			{
+				while(USART_GetFlagStatus(USART1, USART_FLAG_TXE) == RESET);
+				USART_SendData(USART1, *ch);
+				ch++;
+			}
 #endif
+
+			value = font5x7[k] << 24;
+			asm ("rbit %0, %1;" : "=r" (value) : "r" (value)); /* Bit reverse */
+			//value = 0x80;
+			buffer[i++] = (uint8_t)value;
+
+			value = font5x7[k + 1];
+			asm ("rbit %0, %1;" : "=r" (value) : "r" (value)); /* Bit reverse */
+			//value = 0x80;
+			buffer[i++] = (uint8_t)value;
+
+			value = font5x7[k + 2];
+			asm ("rbit %0, %1;" : "=r" (value) : "r" (value)); /* Bit reverse */
+			//value = 0xfe;
+			buffer[i++] = (uint8_t)value;
+
+			value = font5x7[k + 3];
+			asm ("rbit %0, %1;" : "=r" (value) : "r" (value)); /* Bit reverse */
+			//value = 0x80;
+			buffer[i++] = (uint8_t)value;
+
+			value = font5x7[k + 4];
+			asm ("rbit %0, %1;" : "=r" (value) : "r" (value)); /* Bit reverse */
+			//value = 0x80;
+			buffer[i++] = (uint8_t)value;
+			i++;
+
+			str++;
+		}
+	}
+}
+
+/**
+ * @brief  Updates all the LEDs
+ * @param  None
+ * @retval None
+ */
+void LED_Update(void)
+{
+	int i;
+	int j;
+
+	/* Line 1 */
+	j = 0;
+	for (i = 0x1d; i >= 1; i-=4, j++)
+	{
+		LED_WriteData(i, (line1[j]) & 0xf);
+		LED_WriteData(i - 1, (line1[j] >> 4) & 0xf);
+	}
+	for (i = 0x3d; i >= 0x21; i-=4, j++)
+	{
+		LED_WriteData(i, (line1[j]) & 0xf);
+		LED_WriteData(i - 1, (line1[j] >> 4) & 0xf);
+	}
+	for (i = 0x5d; i >= 0x41; i-=4, j++)
+	{
+		LED_WriteData(i, (line1[j]) & 0xf);
+		LED_WriteData(i - 1, (line1[j] >> 4) & 0xf);
+	}
+
+	/* Line 2 */
+	j = 0;
+	for (i = 0x1f; i >= 1; i-=4, j++)
+	{
+		LED_WriteData(i, (line2[j]) & 0xf);
+		LED_WriteData(i - 1, (line2[j] >> 4) & 0xf);
+	}
+	for (i = 0x3f; i >= 0x21; i-=4, j++)
+	{
+		LED_WriteData(i, (line2[j]) & 0xf);
+		LED_WriteData(i - 1, (line2[j] >> 4) & 0xf);
+	}
+	for (i = 0x5f; i >= 0x41; i-=4, j++)
+	{
+		LED_WriteData(i, (line2[j]) & 0xf);
+		LED_WriteData(i - 1, (line2[j] >> 4) & 0xf);
+	}
 }
 
 
@@ -369,7 +672,6 @@ void LED_WriteData(uint8_t address, uint8_t data)
  * @param  None
  * @retval None
  */
-#ifdef ENABLE_SPI
 void SPI_Configuration(void)
 {
 	SPI_InitTypeDef SPI_InitStructure;
@@ -393,7 +695,6 @@ void SPI_Configuration(void)
 	/* Enable SPI */
 	SPI_Cmd(SPI, ENABLE);
 }
-#endif
 
 /**
   * @brief  Inserts a delay time.
@@ -428,6 +729,24 @@ void TaskBuzzer(void *pvParameters)
 			vTaskDelayUntil(&xLastWakeTime, TASK_SPIN_DELAY);
 		}
 	}
+}
+
+/**
+  * @brief  Retargets the C library printf function to the USART.
+  * @param  None
+  * @retval None
+  */
+PUTCHAR_PROTOTYPE
+{
+  /* Place your implementation of fputc here */
+  /* e.g. write a character to the USART */
+  USART_SendData(USART1, (uint8_t) ch);
+
+  /* Loop until the end of transmission */
+  while (USART_GetFlagStatus(USART1, USART_FLAG_TC) == RESET)
+  {}
+
+  return ch;
 }
 
 /**
