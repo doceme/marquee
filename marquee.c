@@ -26,7 +26,9 @@
 
 /* Project Includes */
 #include "marquee.h"
+#if ENABLE_SPRINTF
 #include <stdio.h>
+#endif
 
 /* Definitions */
 #define TASK_SPIN_DELAY		(500 / portTICK_RATE_MS)
@@ -369,6 +371,7 @@ register char   *a;
 }
 #endif
 
+#if ENABLE_SPRINTF
 caddr_t _sbrk(int incr) {
 	extern char _end;		/* Defined by the linker */
 	static char *heap_end;
@@ -386,6 +389,8 @@ caddr_t _sbrk(int incr) {
 	heap_end += incr;
 	return (caddr_t) prev_heap_end;
 }
+#endif
+
 /**
  * @brief  Configures LED marquee.
  * @param  None
@@ -541,7 +546,7 @@ void LED_WriteData(uint8_t address, uint8_t data)
 	SPI_CS_HIGH;
 }
 
-#if 0
+#if 1
 itoa(i, a)
 	register int    i;
 	register char   *a;
@@ -565,6 +570,7 @@ itoa(i, a)
 	{
 		*a++ = *++j;
 	} while (*j);
+	*a = '\0';
 	return (0);
 }
 #endif
@@ -598,7 +604,10 @@ void LED_SetLine(uint8_t line, const char *str)
 #if 1
 			static char test[80];
 			char *ch = test;
+#if ENABLE_SPRINTF
 			siprintf(test, "%d", 1234);
+#endif
+			itoa(1234, test);
 			while (*ch != '\0')
 			{
 				while(USART_GetFlagStatus(USART1, USART_FLAG_TXE) == RESET);
