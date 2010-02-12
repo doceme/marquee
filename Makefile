@@ -221,6 +221,7 @@ CFLAGS += -mapcs-frame
 CFLAGS += -fomit-frame-pointer
 ifeq ($(CODE_SOURCERY), YES)
 CFLAGS += -fpromote-loop-indices
+CFLAGS += -fno-strict-aliasing
 endif
 
 CFLAGS += -Wall
