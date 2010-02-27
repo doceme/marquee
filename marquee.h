@@ -56,5 +56,7 @@
 #define SPI_MASTER_IRQn         SPI2_IRQn
 
 extern uint8_t ready;
+extern uint8_t beep_count;
+extern xTaskHandle xBuzzerTask;
 
 #endif /* MARQUEE_H */

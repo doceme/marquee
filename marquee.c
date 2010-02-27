@@ -36,6 +36,14 @@
 #define NUMBER_OF_BEEPS		3
 #define SPI_CS_DELAY		10
 #define LED_VALUE		0xa
+
+#define IRQ_PRIO_LOW				12		// lower than RTOS
+#define IRQ_PRIO_MID				8		// higher than RTOS
+#define IRQ_PRIO_HIGH				5		// for SPI, ADC, I2C etc...
+#define IRQ_PRIO_HIGHEST			4 		// for USART etc...
+
+#define USART_NVIC_PRIO		IRQ_PRIO_HIGHEST
+
 #define LED_BUFFER_SIZE		24
 
 #define MAX_CHARS_5X7		6
@@ -49,10 +57,11 @@
 
 /* Global Variables */
 uint8_t ready = 0;
+uint8_t beep_count = 0;
+xTaskHandle xBuzzerTask = NULL;
 
+#ifdef ENABLE_LED
 /* Local Variables */
-static uint8_t beep_count = 0;
-static xTaskHandle xBuzzerTask = NULL;
 static uint8_t line1[LED_BUFFER_SIZE];
 static uint8_t line2[LED_BUFFER_SIZE];
 
@@ -188,18 +197,21 @@ static const unsigned char font5x7[] = {
 	0x08, 0x08, 0x2A, 0x1C, 0x08,// ->
 	0x08, 0x1C, 0x2A, 0x08, 0x08 // <-
 };
+#endif
 
 /* Function Prototypes */
 static void TaskBuzzer(void *pvParameters);
 static void RCC_Configuration(void);
 static void GPIO_Configuration(void);
-//static void NVIC_Configuration(void);
+static void NVIC_Configuration(void);
+#ifdef ENABLE_LED
 static void SPI_Configuration(void);
 static void LED_Configuration(void);
 static void LED_WriteCommand(uint8_t command);
 static void LED_WriteData(uint8_t address, uint8_t data);
 static void LED_Update(void);
 static void LED_SetLine(uint8_t line, const char *str);
+#endif
 #ifdef ENABLE_DELAY
 static void Delay(__IO uint32_t nCount);
 #endif
@@ -230,10 +242,13 @@ int main()
 	GPIO_Configuration();
 
 	/* NVIC configuration */
-	//NVIC_Configuration();
+	NVIC_Configuration();
 
-	SPI_Configuration();
+#ifdef ENABLE_LED
 	/* LED configuration */
+	SPI_Configuration();
+	LED_Configuration();
+#endif
 
 	USART_InitStructure.USART_BaudRate = 115200;
 	USART_InitStructure.USART_WordLength = USART_WordLength_8b;
@@ -244,11 +259,16 @@ int main()
 
 	/* USART configuration */
 	USART_Init(USART1, &USART_InitStructure);
+	USART_Init(USART2, &USART_InitStructure);
+
+	/* Enable receive interrupts */
+	USART_ITConfig(USART1, USART_IT_RXNE, ENABLE);
+	USART_ITConfig(USART2, USART_IT_RXNE, ENABLE);
 
 	/* Enable USART */
 	USART_Cmd(USART1, ENABLE);
+	USART_Cmd(USART2, ENABLE);
 
-	LED_Configuration();
 
 	/* Time base configuration */
 	TIM_TimeBaseStructure.TIM_Period = 999;
@@ -276,6 +296,8 @@ int main()
 	/* Start the FreeRTOS scheduler */
 	vTaskStartScheduler();
 
+	while (1);
+
 	/* If all is well we will never reach here as the scheduler will now be running. */
 	/* If we do get here, it will most likely be because we ran out of heap space. */
 	return 0;
@@ -295,8 +317,8 @@ void RCC_Configuration(void)
 	/* PCLK2 = HCLK/2 */
 	RCC_PCLK2Config(RCC_HCLK_Div2);
 
-	/* TIM3 clock enable */
-	RCC_APB1PeriphClockCmd(RCC_APB1Periph_TIM3, ENABLE);
+	/* USART2 and TIM3 clock enable */
+	RCC_APB1PeriphClockCmd(RCC_APB1Periph_TIM3 | RCC_APB1Periph_USART2, ENABLE);
 
 	/* Enable GPIOC peripheral clock */
 	RCC_APB2PeriphClockCmd(RCC_APB2Periph_GPIOA |
@@ -306,8 +328,10 @@ void RCC_Configuration(void)
 				RCC_APB2Periph_AFIO,
 				ENABLE);
 
+#ifdef ENABLE_LED
 	/* Enable SPI2 Periph clock */
 	RCC_APB1PeriphClockCmd(SPI_CLK, ENABLE);
+#endif
 }
 
 /**
@@ -319,12 +343,6 @@ void GPIO_Configuration(void)
 {
 	GPIO_InitTypeDef GPIO_InitStructure;
 
-	/* Initialize GPIOB */
-	GPIO_InitStructure.GPIO_Pin = SPI_PIN_CS;
-	GPIO_InitStructure.GPIO_Speed = GPIO_Speed_50MHz;
-	GPIO_InitStructure.GPIO_Mode = GPIO_Mode_Out_PP;
-	GPIO_Init(GPIOB, &GPIO_InitStructure);
-
 	/* Initialize GPIOC */
 	GPIO_InitStructure.GPIO_Pin = GPIO_Pin_6;
 	GPIO_InitStructure.GPIO_Speed = GPIO_Speed_50MHz;
@@ -333,26 +351,33 @@ void GPIO_Configuration(void)
 
 	GPIO_PinRemapConfig(GPIO_FullRemap_TIM3, ENABLE);
 
+#ifdef ENABLE_LED
+	/* Initialize GPIOB */
+	GPIO_InitStructure.GPIO_Pin = SPI_PIN_CS;
+	GPIO_InitStructure.GPIO_Speed = GPIO_Speed_50MHz;
+	GPIO_InitStructure.GPIO_Mode = GPIO_Mode_Out_PP;
+	GPIO_Init(GPIOB, &GPIO_InitStructure);
+
 	/* Configure SPI pins: SCK, MISO and MOSI */
 	GPIO_InitStructure.GPIO_Pin = SPI_PIN_SCK | SPI_PIN_MISO | SPI_PIN_MOSI;
 	GPIO_InitStructure.GPIO_Speed = GPIO_Speed_50MHz;
 	GPIO_InitStructure.GPIO_Mode = GPIO_Mode_AF_PP;
 	GPIO_Init(SPI_GPIO, &GPIO_InitStructure);
 	GPIO_SetBits(SPI_GPIO, SPI_PIN_CS); // CS High
+#endif
 
 	/* Configure USART Tx as alternate function push-pull */
-	GPIO_InitStructure.GPIO_Pin = GPIO_Pin_9;
+	GPIO_InitStructure.GPIO_Pin = GPIO_Pin_2 | GPIO_Pin_9;
 	GPIO_InitStructure.GPIO_Mode = GPIO_Mode_AF_PP;
 	GPIO_InitStructure.GPIO_Speed = GPIO_Speed_50MHz;
 	GPIO_Init(GPIOA, &GPIO_InitStructure);
 
 	/* Configure USART Rx as input floating */
-	GPIO_InitStructure.GPIO_Pin = GPIO_Pin_10;
+	GPIO_InitStructure.GPIO_Pin = GPIO_Pin_3 | GPIO_Pin_10;
 	GPIO_InitStructure.GPIO_Mode = GPIO_Mode_IN_FLOATING;
 	GPIO_Init(GPIOA, &GPIO_InitStructure);
 }
 
-#if 0
 /**
   * @brief  Configure the nested vectored interrupt controller.
   * @param  None
@@ -360,19 +385,32 @@ void GPIO_Configuration(void)
   */
 void NVIC_Configuration(void)
 {
-  NVIC_InitTypeDef NVIC_InitStructure;
+	/* Set the Vector Table base address as specified in .ld file */
+	NVIC_SetVectorTable(NVIC_VectTab_FLASH, 0x0);
 
-  /* 1 bit for pre-emption priority, 3 bits for subpriority */
-  NVIC_PriorityGroupConfig(NVIC_PriorityGroup_1);
+	/* 4 bits for Interupt priorities so no sub priorities */
+	NVIC_PriorityGroupConfig(NVIC_PriorityGroup_4);
 
-  /* Configure and enable SPI_MASTER interrupt -------------------------------*/
-  NVIC_InitStructure.NVIC_IRQChannel = SPI_MASTER_IRQn;
-  NVIC_InitStructure.NVIC_IRQChannelPreemptionPriority = 1;
-  NVIC_InitStructure.NVIC_IRQChannelSubPriority = 2;
-  NVIC_InitStructure.NVIC_IRQChannelCmd = ENABLE;
-  NVIC_Init(&NVIC_InitStructure);
+	/* Configure HCLK clock as SysTick clock source. */
+	SysTick_CLKSourceConfig(SysTick_CLKSource_HCLK);
+
+	/* Configure the USART Interrupts */
+	NVIC_InitTypeDef NVIC_InitStructure;
+
+	/* Enable the USART1 Interrupt */
+	NVIC_InitStructure.NVIC_IRQChannel = USART1_IRQn;
+	NVIC_InitStructure.NVIC_IRQChannelPreemptionPriority = USART_NVIC_PRIO;
+	NVIC_InitStructure.NVIC_IRQChannelSubPriority = 1;
+	NVIC_InitStructure.NVIC_IRQChannelCmd = ENABLE;
+	NVIC_Init(&NVIC_InitStructure);
+
+	/* Enable the USART2 Interrupt */
+	NVIC_InitStructure.NVIC_IRQChannel = USART2_IRQn;
+	NVIC_InitStructure.NVIC_IRQChannelPreemptionPriority = USART_NVIC_PRIO;
+	NVIC_InitStructure.NVIC_IRQChannelSubPriority = 0;
+	NVIC_InitStructure.NVIC_IRQChannelCmd = ENABLE;
+	NVIC_Init(&NVIC_InitStructure);
 }
-#endif
 
 #define INT_DIGITS 19           /* enough for 64 bit integer */
 
@@ -424,6 +462,7 @@ caddr_t _sbrk(int incr) {
 }
 #endif
 
+#ifdef ENABLE_LED
 /**
  * @brief  Configures LED marquee.
  * @param  None
@@ -436,15 +475,18 @@ void LED_Configuration(void)
 	LED_WriteCommand(0x03);
 	LED_WriteCommand(0x2c);
 	LED_WriteCommand(0xaf);
+	LED_WriteCommand(0x09);
 
 	for (i = 0; i < 96; i++)
 	{
 		LED_WriteData(i, 0x0);
 	}
 
+#if 0
 	LED_SetLine(0, "LED");
 	LED_SetLine(1, "Test");
 	LED_Update();
+#endif
 }
 
 /**
@@ -477,7 +519,6 @@ void LED_WriteData(uint8_t address, uint8_t data)
 	SPI_CS_HIGH;
 }
 
-#if 1
 int itoa(i, a)
 	register int    i;
 	register char   *a;
@@ -504,7 +545,6 @@ int itoa(i, a)
 	*a = '\0';
 	return (0);
 }
-#endif
 
 /**
  * @brief  Updates all the LEDs
@@ -521,24 +561,6 @@ void LED_SetLine(uint8_t line, const char *str)
 	if (str != NULL)
 	{
 		uint8_t i = 0;
-
-#if 1
-			char test[80];
-			char *ch = (char *)test;
-#ifdef ENABLE_SPRINTF
-			sprintf(test, "%s", 1234);
-#endif
-			itoa(font5x7[((char)*str) * 5 + 2], ch);
-			while (*ch != '\0')
-			{
-				while(USART_GetFlagStatus(USART1, USART_FLAG_TXE) == RESET);
-				USART_SendData(USART1, *ch++);
-			}
-				while(USART_GetFlagStatus(USART1, USART_FLAG_TXE) == RESET);
-				USART_SendData(USART1, '\r');
-				while(USART_GetFlagStatus(USART1, USART_FLAG_TXE) == RESET);
-				USART_SendData(USART1, '\n');
-#endif
 
 		while ((*str != 0) && (i < 24))
 		{
@@ -647,11 +669,12 @@ void SPI_Configuration(void)
 	SPI_Init(SPI, &SPI_InitStructure);
 
 	/* Enable SPI_MASTER TXE interrupt */
-	SPI_I2S_ITConfig(SPI, SPI_I2S_IT_TXE, ENABLE);
+	//SPI_I2S_ITConfig(SPI, SPI_I2S_IT_TXE, ENABLE);
 
 	/* Enable SPI */
 	SPI_Cmd(SPI, ENABLE);
 }
+#endif
 
 /**
   * @brief  Inserts a delay time.
@@ -711,6 +734,13 @@ PUTCHAR_PROTOTYPE
 */
 void vApplicationIdleHook(void)
 {
+	static uint8_t first = 1;
 	/* Called when the scheduler has no tasks to run */
+
+	if (first)
+	{
+		first = 0;
+		BEEP(3);
+	}
 }
 

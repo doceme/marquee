@@ -25,7 +25,7 @@
 
 # Set developer code and compile options
 # Set to YES for debugging
-DEBUG = NO
+DEBUG = YES
 # Set to YES when using Code Sourcery toolchain
 CODE_SOURCERY=YES
 
@@ -175,7 +175,7 @@ LOADFORMAT = binary
 #LOADFORMAT = both
 
 # Debugging format.
-DEBUGF = dwarf-2
+DEBUGF = gdb
 
 # Place project-specific -D (define) and/or 
 # -U options for C here.
