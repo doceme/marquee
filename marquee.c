@@ -58,7 +58,7 @@ int main()
 	NVIC_Configuration();
 
 	/* LED configuration */
-	//LED_Configuration();
+	result = LED_Configuration();
 	result = Buzzer_Configuration();
 	result = Network_Configuration();
 

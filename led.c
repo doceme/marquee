@@ -35,6 +35,8 @@
 #define LED_NUM_LINES 2
 #define LED_BUFFER_SIZE		24
 
+#define LED_DE_DP016
+
 #define MAX_CHARS_5X7		6
 
 #define SPI_CS_LOW	while (SPI_I2S_GetFlagStatus(SPI, SPI_I2S_FLAG_TXE) == RESET); \
@@ -72,9 +74,9 @@ int LED_Configuration(void)
 
 	LED_WriteCommand(0x01);
 	LED_WriteCommand(0x03);
+	LED_WriteCommand(0x08);
 	LED_WriteCommand(0x2c);
 	LED_WriteCommand(0xaf);
-	LED_WriteCommand(0x09);
 
 	for (i = 0; i < 96; i++)
 	{
@@ -137,6 +139,49 @@ int LED_SetLine(uint8_t line, char *message)
 
 		message++;
 	}
+
+	return 0;
+}
+
+int LED_Refresh(void)
+{
+	int i = 0;
+	int j = 0;
+
+	uint8_t* line0 = &lines[0];
+	uint8_t* line1 = &lines[1];
+
+#ifndef LED_DE_DP016
+	for (j = 0; j < LED_BUFFER_SIZE; j++)
+	{
+		LED_WriteData(i++, (line0[j]) & 0xf);
+		LED_WriteData(i++, (line0[j] >> 4) & 0xf);
+		LED_WriteData(i++, (line1[j]) & 0xf);
+		LED_WriteData(i++, (line1[j] >> 4) & 0xf);
+	}
+#else
+	for (i = 0x1f, j = 0; i >= 1; i-=4, j++)
+	{
+		LED_WriteData(i, (line1[j]) & 0xf);
+		LED_WriteData(i - 1, (line1[j] >> 4) & 0xf);
+		LED_WriteData(i - 2, (line0[j]) & 0xf);
+		LED_WriteData(i - 3, (line0[j] >> 4) & 0xf);
+	}
+	for (i = 0x3f; i >= 0x21; i-=4, j++)
+	{
+		LED_WriteData(i, (line1[j]) & 0xf);
+		LED_WriteData(i - 1, (line1[j] >> 4) & 0xf);
+		LED_WriteData(i - 2, (line0[j]) & 0xf);
+		LED_WriteData(i - 3, (line0[j] >> 4) & 0xf);
+	}
+	for (i = 0x5f; i >= 0x41; i-=4, j++)
+	{
+		LED_WriteData(i, (line1[j]) & 0xf);
+		LED_WriteData(i - 1, (line1[j] >> 4) & 0xf);
+		LED_WriteData(i - 2, (line0[j]) & 0xf);
+		LED_WriteData(i - 3, (line0[j] >> 4) & 0xf);
+	}
+#endif
 
 	return 0;
 }
