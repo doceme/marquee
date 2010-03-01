@@ -140,48 +140,6 @@ void SysTick_Handler(void)
 /******************************************************************************/
 
 /**
-  * @brief  This function handles USART1 global interrupt request.
-  * @param  None
-  * @retval None
-  */
-void USART1_IRQHandler(void)
-{
-	if(USART_GetITStatus(USART1, USART_IT_RXNE) != RESET)
-	{
-		/* Clear interrupt */
-		USART_ClearITPendingBit(USART1, USART_IT_RXNE);
-
-		if (USART_GetFlagStatus(USART2, USART_FLAG_TXE) != RESET)
-		{
-			/* Read one byte from the receive data register */
-			uint16_t ch = USART_ReceiveData(USART1);
-			USART_SendData(USART2, ch);
-		}
-	}
-}
-
-/**
-  * @brief  This function handles USART2 global interrupt request.
-  * @param  None
-  * @retval None
-  */
-void USART2_IRQHandler(void)
-{
-	if(USART_GetITStatus(USART2, USART_IT_RXNE) != RESET)
-	{
-		/* Clear interrupt */
-		USART_ClearITPendingBit(USART2, USART_IT_RXNE);
-
-		if (USART_GetFlagStatus(USART1, USART_FLAG_TXE) != RESET)
-		{
-			/* Read one byte from the receive data register */
-			uint16_t ch = USART_ReceiveData(USART2);
-			USART_SendData(USART1, ch);
-		}
-	}
-}
-
-/**
   * @brief  This function handles PPP interrupt request.
   * @param  None
   * @retval None
