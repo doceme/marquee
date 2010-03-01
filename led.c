@@ -148,8 +148,8 @@ int LED_Refresh(void)
 	int i = 0;
 	int j = 0;
 
-	uint8_t* line0 = &lines[0];
-	uint8_t* line1 = &lines[1];
+	uint8_t* line0 = lines[0];
+	uint8_t* line1 = lines[1];
 
 #ifndef LED_DE_DP016
 	for (j = 0; j < LED_BUFFER_SIZE; j++)
