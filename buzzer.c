@@ -41,8 +41,10 @@
 
 #define BUZZER_TIMER		TIM3
 
+#define BUSY_BIT_BUZZER		1
+
 /* Local Variables */
-static uint8_t beepCount = 0;
+static volatile uint8_t beepCount = 0;
 static xTaskHandle xBuzzerTask = NULL;
 static uint32_t onDuration = DEFAULT_BEEP_DURATION / portTICK_RATE_MS;
 static uint32_t offDuration = DEFAULT_BEEP_DURATION / portTICK_RATE_MS;
@@ -51,7 +53,7 @@ static uint32_t offDuration = DEFAULT_BEEP_DURATION / portTICK_RATE_MS;
 static void RCC_Configuration(void);
 static void GPIO_Configuration(void);
 static void Timer_Configuration(void);
-static void TaskBuzzer(void *pvParameters);
+static void Buzzer_Task(void *pvParameters);
 
 int Buzzer_Configuration(void)
 {
@@ -63,7 +65,7 @@ int Buzzer_Configuration(void)
 	Timer_Configuration();
 
 	/* Create a FreeRTOS task */
-	xTaskCreate(TaskBuzzer, (signed portCHAR *)"Buzzer", configMINIMAL_STACK_SIZE , NULL, tskIDLE_PRIORITY + 1, &xBuzzerTask);
+	xTaskCreate(Buzzer_Task, (signed portCHAR *)"Buzzer", configMINIMAL_STACK_SIZE , NULL, tskIDLE_PRIORITY, &xBuzzerTask);
 	return 0;
 }
 
@@ -81,6 +83,7 @@ int Buzzer_SetOffDuration(uint32_t duration)
 
 int Buzzer_Beep(uint32_t count)
 {
+	BUSY(BUZZER);
 	if (xBuzzerTask)
 	{
 		beepCount = count;
@@ -89,6 +92,11 @@ int Buzzer_Beep(uint32_t count)
 	}
 
 	return -ERR_NOINIT;
+}
+
+int Buzzer_IsBeeping(void)
+{
+	return (beepCount == 0 ? 0 : 1);
 }
 
 /**
@@ -159,7 +167,7 @@ void Timer_Configuration(void)
 	TIM_ARRPreloadConfig(BUZZER_TIMER, ENABLE);
 }
 
-void TaskBuzzer(void *pvParameters)
+void Buzzer_Task(void *pvParameters)
 {
 	portTickType xLastWakeTime;
 
@@ -168,6 +176,7 @@ void TaskBuzzer(void *pvParameters)
 
 	for(;;)
 	{
+		IDLE(BUZZER);
 		vTaskSuspend(NULL);
 
 		for(; beepCount > 0; beepCount--)
@@ -178,7 +187,9 @@ void TaskBuzzer(void *pvParameters)
 
 			/* Timer disable counter */
 			TIM_Cmd(BUZZER_TIMER, DISABLE);
-			vTaskDelayUntil(&xLastWakeTime, offDuration);
+
+			//if (beepCount > 1)
+				vTaskDelayUntil(&xLastWakeTime, offDuration);
 		}
 	}
 }

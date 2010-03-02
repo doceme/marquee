@@ -57,4 +57,13 @@ int Buzzer_SetOffDuration(uint32_t duration);
  */
 int Buzzer_Beep(uint32_t count);
 
+/**
+ * @brief  Determines whether or not the buzzer is beeping
+ * @param  None
+ * @retval 0 if not beeping
+ * @retval 1 if beeping
+ * @retval Negative error code on failure
+ */
+int Buzzer_IsBeeping(void);
+
 #endif /* BUZZER_H */

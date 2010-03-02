@@ -27,40 +27,59 @@
 #include "marquee.h"
 #include "common.h"
 #include "buzzer.h"
-#include "network.h"
 #include "led.h"
+#include "network.h"
+
+#if 0
+typedef enum NetworkState
+{
+	NotConnected,
+	Connected
+} NetworkState;
+#endif
 
 /* Definitions */
+//#define DEBUG
+#define BUSY_BIT_MARQUEE	0
 
 /* Global Variables */
+xSemaphoreHandle xBusyMutex = NULL;
+volatile uint32_t busy = 0;
 
 /* Local Variables */
+static volatile uint8_t program = 0;
+static xTaskHandle xMainTask = NULL;
+//static NetworkState networkState = NotConnected;
 
 /* Function Prototypes */
 static void RCC_Configuration(void);
 static void GPIO_Configuration(void);
+static void EXTI_Configuration(void);
+static void RTC_Configuration(void);
 static void NVIC_Configuration(void);
+static void SYSCLKConfig_STOP(void);
+static void Main_Task(void *pvParameters);
 
 /**
  * Main function
  */
 int main()
 {
-	int result;
-
-	/* System clocks configuration */
 	RCC_Configuration();
-
-	/* GPIO configuration */
 	GPIO_Configuration();
-
-	/* NVIC configuration */
+	EXTI_Configuration();
+	RTC_Configuration();
 	NVIC_Configuration();
 
-	/* LED configuration */
-	result = LED_Configuration();
-	result = Buzzer_Configuration();
-	result = Network_Configuration();
+	Buzzer_Configuration();
+	LED_Configuration();
+	Network_Configuration();
+
+	xBusyMutex = xSemaphoreCreateMutex();
+#ifndef DEBUG
+	/* Create a FreeRTOS task */
+	xTaskCreate(Main_Task, (signed portCHAR *)"Main", configMINIMAL_STACK_SIZE , NULL, tskIDLE_PRIORITY + 1, &xMainTask);
+#endif
 
 	/* Start the FreeRTOS scheduler */
 	vTaskStartScheduler();
@@ -83,6 +102,9 @@ void RCC_Configuration(void)
 
 	/* PCLK2 = HCLK/2 */
 	RCC_PCLK2Config(RCC_HCLK_Div2);
+
+	/* Enable PWR clock */
+	RCC_APB1PeriphClockCmd(RCC_APB1Periph_PWR | RCC_APB1Periph_BKP, ENABLE);
 }
 
 /**
@@ -92,6 +114,85 @@ void RCC_Configuration(void)
  */
 void GPIO_Configuration(void)
 {
+	GPIO_InitTypeDef GPIO_InitStructure;
+
+	/* Configure button input floating */
+	GPIO_InitStructure.GPIO_Pin = GPIO_Pin_11;
+	GPIO_InitStructure.GPIO_Mode = GPIO_Mode_IN_FLOATING;
+	GPIO_Init(GPIOA, &GPIO_InitStructure);
+
+	/* Connect Button EXTI Line to Button GPIO Pin */
+	GPIO_EXTILineConfig(GPIO_PortSourceGPIOA, GPIO_PinSource11);
+}
+
+/**
+  * @brief  Configures EXTI Lines
+  * @param  None
+  * @retval None
+  */
+void EXTI_Configuration(void)
+{
+	EXTI_InitTypeDef EXTI_InitStructure;
+
+	/* Configure EXTI Line17(RTC Alarm) to generate an interrupt on rising edge */
+	EXTI_ClearITPendingBit(EXTI_Line17);
+	EXTI_InitStructure.EXTI_Line = EXTI_Line17;
+	EXTI_InitStructure.EXTI_Mode = EXTI_Mode_Interrupt;
+	EXTI_InitStructure.EXTI_Trigger = EXTI_Trigger_Rising;
+	EXTI_InitStructure.EXTI_LineCmd = ENABLE;
+	EXTI_Init(&EXTI_InitStructure);
+
+	EXTI_ClearITPendingBit(EXTI_Line11);
+	EXTI_InitStructure.EXTI_Line = EXTI_Line11;
+	EXTI_InitStructure.EXTI_Mode = EXTI_Mode_Interrupt;
+	EXTI_InitStructure.EXTI_Trigger = EXTI_Trigger_Falling;
+	EXTI_InitStructure.EXTI_LineCmd = ENABLE;
+	EXTI_Init(&EXTI_InitStructure);
+}
+
+/**
+  * @brief  Configures RTC clock source and prescaler
+  * @param  None
+  * @retval None
+  */
+void RTC_Configuration(void)
+{
+	/* RTC clock source configuration ------------------------------------------*/
+	/* Allow access to BKP Domain */
+	PWR_BackupAccessCmd(ENABLE);
+
+	/* Reset Backup Domain */
+	BKP_DeInit();
+
+	/* Enable the LSE OSC */
+	RCC_LSEConfig(RCC_LSE_ON);
+
+	/* Wait till LSE is ready */
+	while(RCC_GetFlagStatus(RCC_FLAG_LSERDY) == RESET)
+	{
+	}
+
+	/* Select the RTC Clock Source */
+	RCC_RTCCLKConfig(RCC_RTCCLKSource_LSE);
+
+	/* Enable the RTC Clock */
+	RCC_RTCCLKCmd(ENABLE);
+
+	/* RTC configuration -------------------------------------------------------*/
+	/* Wait for RTC APB registers synchronisation */
+	RTC_WaitForSynchro();
+
+	/* Set the RTC time base to 1s */
+	RTC_SetPrescaler(32767);
+
+	/* Wait until last write operation on RTC registers has finished */
+	RTC_WaitForLastTask();
+
+	/* Enable the RTC Alarm interrupt */
+	RTC_ITConfig(RTC_IT_ALR, ENABLE);
+
+	/* Wait until last write operation on RTC registers has finished */
+	RTC_WaitForLastTask();
 }
 
 /**
@@ -101,6 +202,8 @@ void GPIO_Configuration(void)
   */
 void NVIC_Configuration(void)
 {
+	NVIC_InitTypeDef NVIC_InitStructure;
+
 	/* Set the Vector Table base address as specified in .ld file */
 	NVIC_SetVectorTable(NVIC_VectTab_FLASH, 0x0);
 
@@ -109,6 +212,67 @@ void NVIC_Configuration(void)
 
 	/* Configure HCLK clock as SysTick clock source. */
 	SysTick_CLKSourceConfig(SysTick_CLKSource_HCLK);
+
+	NVIC_InitStructure.NVIC_IRQChannel = RTCAlarm_IRQn;
+	NVIC_InitStructure.NVIC_IRQChannelPreemptionPriority = 0;
+	NVIC_InitStructure.NVIC_IRQChannelSubPriority = 0;
+	NVIC_InitStructure.NVIC_IRQChannelCmd = ENABLE;
+	NVIC_Init(&NVIC_InitStructure);
+
+	/* Enable and set Button EXTI Interrupt to the lowest priority */
+	NVIC_InitStructure.NVIC_IRQChannel = EXTI15_10_IRQn;
+	NVIC_InitStructure.NVIC_IRQChannelPreemptionPriority = 0x0F;
+	NVIC_InitStructure.NVIC_IRQChannelSubPriority = 0x0F;
+	NVIC_InitStructure.NVIC_IRQChannelCmd = ENABLE;
+
+	NVIC_Init(&NVIC_InitStructure);
+}
+
+/**
+  * @brief  Configures system clock after wake-up from STOP: enable HSE, PLL
+  *   and select PLL as system clock source
+  * @param  None
+  * @retval None
+  */
+void SYSCLKConfig_STOP(void)
+{
+	ErrorStatus HSEStartUpStatus;
+
+	/* Enable HSE */
+	RCC_HSEConfig(RCC_HSE_ON);
+
+	/* Wait till HSE is ready */
+	HSEStartUpStatus = RCC_WaitForHSEStartUp();
+
+	if(HSEStartUpStatus == SUCCESS)
+	{
+
+#ifdef STM32F10X_CL
+		/* Enable PLL2 */ 
+		RCC_PLL2Cmd(ENABLE);
+
+		/* Wait till PLL2 is ready */
+		while(RCC_GetFlagStatus(RCC_FLAG_PLL2RDY) == RESET)
+		{
+		}
+#endif
+
+		/* Enable PLL */ 
+		RCC_PLLCmd(ENABLE);
+
+		/* Wait till PLL is ready */
+		while(RCC_GetFlagStatus(RCC_FLAG_PLLRDY) == RESET)
+		{
+		}
+
+		/* Select PLL as system clock source */
+		RCC_SYSCLKConfig(RCC_SYSCLKSource_PLLCLK);
+
+		/* Wait till PLL is used as system clock source */
+		while(RCC_GetSYSCLKSource() != 0x08)
+		{
+		}
+	}
 }
 
 /**
@@ -116,15 +280,112 @@ void NVIC_Configuration(void)
 */
 void vApplicationIdleHook(void)
 {
-#if 0
-	static uint8_t first = 1;
-	/* Called when the scheduler has no tasks to run */
+#ifndef DEBUG
+		if (program || busy)
+			return;
 
-	if (first)
-	{
-		first = 0;
-		Buzzer_Beep(3);
-	}
+		/* Set wakeup time */
+		RTC_SetAlarm(RTC_GetCounter() + 3);
+
+		/* Wait until last write operation on RTC registers has finished */
+		RTC_WaitForLastTask();
+
+		while (USART_GetFlagStatus(USART1, USART_FLAG_TXE) == RESET);
+		USART_SendData(USART1, 'S');
+		while (USART_GetFlagStatus(USART1, USART_FLAG_TC) == RESET);
+
+		/* Request to enter STOP mode with regulator in low power mode*/
+		PWR_EnterSTOPMode(PWR_Regulator_LowPower, PWR_STOPEntry_WFI);
+
+		/* Configures system clock after wake-up from STOP: enable HSE, PLL and select
+		   PLL as system clock source (HSE and PLL are disabled in STOP mode) */
+		SYSCLKConfig_STOP();
+
+		/* At this stage the system has resumed from STOP mode */
+		while (USART_GetFlagStatus(USART1, USART_FLAG_TXE) == RESET);
+		USART_SendData(USART1, 'A');
+		while (USART_GetFlagStatus(USART1, USART_FLAG_TC) == RESET);
+
+		if (!program)
+			vTaskResume(xMainTask);
 #endif
+}
+
+/**
+  * @brief  This function handles External lines 9 to 5 interrupt request.
+  * @param  None
+  * @retval None
+  */
+void EXTI15_10_IRQHandler(void)
+{
+	if(EXTI_GetITStatus(EXTI_Line11) != RESET)
+	{
+		program = 1;
+
+		/* Clear the Key Button EXTI line pending bit */
+		EXTI_ClearITPendingBit(EXTI_Line11);
+	}
+}
+
+/**
+  * @brief  This function handles RTC Alarm interrupt request
+  * @param  None
+  * @retval None
+  */
+void RTCAlarm_IRQHandler(void)
+{
+	if(RTC_GetITStatus(RTC_IT_ALR) != RESET)
+	{
+		/* Clear EXTI line17 pending bit */
+		EXTI_ClearITPendingBit(EXTI_Line17);
+
+		/* Check if the Wake-Up flag is set */
+		if(PWR_GetFlagStatus(PWR_FLAG_WU) != RESET)
+		{
+			/* Clear Wake Up flag */
+			PWR_ClearFlag(PWR_FLAG_WU);
+		}
+
+		/* Wait until last write operation on RTC registers has finished */
+		RTC_WaitForLastTask();
+
+		/* Clear RTC Alarm interrupt pending bit */
+		RTC_ClearITPendingBit(RTC_IT_ALR);
+
+		/* Wait until last write operation on RTC registers has finished */
+		RTC_WaitForLastTask();
+	}
+}
+
+void Main_Task(void *pvParameters)
+{
+	char cmd[] = "AT+i\r";
+	char *ch;
+	portTickType xLastWakeTime;
+
+	/* Initialise the xLastExecutionTime variable on task entry */
+	xLastWakeTime = xTaskGetTickCount();
+
+	for(;;)
+	{
+		BUSY(MARQUEE);
+#ifndef DEBUG
+		while (USART_GetFlagStatus(USART1, USART_FLAG_TXE) == RESET);
+		USART_SendData(USART2, 'W');
+
+		//Buzzer_Beep(1);
+
+		ch = cmd;
+		while (*ch != '\0')
+		{
+			while (USART_GetFlagStatus(USART2, USART_FLAG_TXE) == RESET);
+			USART_SendData(USART2, *ch++);
+		}
+
+		vTaskDelay(10 / portTICK_RATE_MS);
+#endif
+		IDLE(MARQUEE);
+		vTaskSuspend(NULL);
+	}
 }
 
