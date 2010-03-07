@@ -39,12 +39,12 @@ typedef enum NetworkState
 #endif
 
 /* Definitions */
-//#define DEBUG
+#define DEBUG
 #define BUSY_BIT_MARQUEE	0
 
 /* Global Variables */
-xSemaphoreHandle xBusyMutex = NULL;
 volatile uint32_t busy = 0;
+xSemaphoreHandle xBusyMutex = NULL;
 
 /* Local Variables */
 static volatile uint8_t program = 0;
@@ -57,8 +57,20 @@ static void GPIO_Configuration(void);
 static void EXTI_Configuration(void);
 static void RTC_Configuration(void);
 static void NVIC_Configuration(void);
+#ifndef DEBUG
 static void SYSCLKConfig_STOP(void);
+#endif
 static void Main_Task(void *pvParameters);
+
+void assert_failed(uint8_t *function, uint32_t line)
+{
+#if 1
+	while (USART_GetFlagStatus(USART1, USART_FLAG_TXE) == RESET);
+	USART_SendData(USART1, '!');
+	while (USART_GetFlagStatus(USART1, USART_FLAG_TC) == RESET);
+#endif
+	while (1);
+}
 
 /**
  * Main function
@@ -71,15 +83,12 @@ int main()
 	RTC_Configuration();
 	NVIC_Configuration();
 
-	Buzzer_Configuration();
-	LED_Configuration();
-	Network_Configuration();
-
 	xBusyMutex = xSemaphoreCreateMutex();
-#ifndef DEBUG
+	assert_param(xBusyMutex);
+
 	/* Create a FreeRTOS task */
 	xTaskCreate(Main_Task, (signed portCHAR *)"Main", configMINIMAL_STACK_SIZE , NULL, tskIDLE_PRIORITY + 1, &xMainTask);
-#endif
+	assert_param(xMainTask);
 
 	/* Start the FreeRTOS scheduler */
 	vTaskStartScheduler();
@@ -234,6 +243,7 @@ void NVIC_Configuration(void)
   * @param  None
   * @retval None
   */
+#ifndef DEBUG
 void SYSCLKConfig_STOP(void)
 {
 	ErrorStatus HSEStartUpStatus;
@@ -274,6 +284,7 @@ void SYSCLKConfig_STOP(void)
 		}
 	}
 }
+#endif
 
 /**
 * Idle hook function
@@ -359,33 +370,40 @@ void RTCAlarm_IRQHandler(void)
 
 void Main_Task(void *pvParameters)
 {
-	char cmd[] = "AT+i\r";
-	char *ch;
+	int result = 0;
 	portTickType xLastWakeTime;
 
 	/* Initialise the xLastExecutionTime variable on task entry */
 	xLastWakeTime = xTaskGetTickCount();
 
+	result = Buzzer_Configuration();
+	assert_param(result >= 0);
+
+	//result = LED_Configuration();
+	//assert_param(result >= 0);
+
+	result = Network_Configuration();
+	assert_param(result >= 0);
+
 	for(;;)
 	{
 		BUSY(MARQUEE);
-#ifndef DEBUG
-		while (USART_GetFlagStatus(USART1, USART_FLAG_TXE) == RESET);
-		USART_SendData(USART2, 'W');
+		//while (USART_GetFlagStatus(USART1, USART_FLAG_TXE) == RESET);
+		//USART_SendData(USART1, 'W');
 
-		//Buzzer_Beep(1);
+		result = Network_SendCommand("AT+i\r", "foo", 3000);
 
-		ch = cmd;
-		while (*ch != '\0')
+		if (result)
 		{
-			while (USART_GetFlagStatus(USART2, USART_FLAG_TXE) == RESET);
-			USART_SendData(USART2, *ch++);
+			Buzzer_Beep(1);
 		}
 
-		vTaskDelay(10 / portTICK_RATE_MS);
-#endif
 		IDLE(MARQUEE);
+#ifndef DEBUG
 		vTaskSuspend(NULL);
+#else
+		vTaskDelay(3000 / portTICK_RATE_MS);
+#endif
 	}
 }
 

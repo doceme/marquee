@@ -42,10 +42,11 @@ int Network_Configuration(void);
  * @param  timeout A timeout in milliseconds for which to wait for the response
  *                 before returning. Waits indefinitely if set to 0.
  * @retval 0 if successful
+ * @retval -ERR_PARAM if command is NULL
  * @retval -ERR_TIMEOUT if response was not received in timeout milliseconds
  * @retval -ERR_GENERIC if the command failed to be sent
  */
-int Network_Send(char *command, char* response, uint32_t timeout);
+int Network_SendCommand(char *command, char* response, uint32_t timeout);
 
 #endif /* NETWORK_H */
 

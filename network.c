@@ -41,13 +41,22 @@
 
 #define NETWORK_USART		USART2
 
+#define NETWORK_QUEUE_SIZE	16
+#define NETWORK_BUFFER_SIZE	256
+
 /* Local Variables */
+static xQueueHandle xQueue = NULL;
+
+static uint8_t txBuffer[NETWORK_BUFFER_SIZE];
+static uint32_t txIndex;
+static uint32_t txSize;
 
 /* Function Prototypes */
 static void RCC_Configuration(void);
 static void GPIO_Configuration(void);
 static void NVIC_Configuration(void);
 static void USART_Configuration(void);
+static int WaitForResponse(char* response, uint32_t timeout);
 
 int Network_Configuration(void)
 {
@@ -55,12 +64,99 @@ int Network_Configuration(void)
 	GPIO_Configuration();
 	NVIC_Configuration();
 	USART_Configuration();
+
+	xQueue = xQueueCreate(NETWORK_QUEUE_SIZE, sizeof(uint8_t));
+	assert_param(xQueue);
+
 	return 0;
 }
-
-int Network_Send(char *command, char* response, uint32_t timeout)
+int Network_SendCommand(char *command, char* response, uint32_t timeout)
 {
-	return -ERR_NOIMP;
+	int result = 0;
+	int i = 0;
+	uint8_t *ch = txBuffer;
+
+	if (!command || !response)
+	{
+		return -ERR_PARAM;
+	}
+
+	portENTER_CRITICAL();
+
+	txIndex = 0;
+	txSize = 0;
+
+	while (*command != '\0')
+	{
+		*ch++ = *command++;
+
+		if (++txSize >= (NETWORK_BUFFER_SIZE - 1))
+		{
+			return -ERR_OVERFLOW;
+		}
+	}
+
+	*ch = '\0';
+
+	/* Enable transmit empty interrupt */
+	USART_ITConfig(USART2, USART_IT_TXE, ENABLE);
+
+	portEXIT_CRITICAL();
+
+	/* Wait for response */
+	if (response)
+	{
+		result = WaitForResponse(response, timeout);
+	}
+
+	return result;
+}
+
+int WaitForResponse(char* response, uint32_t timeout)
+{
+	portTickType elapsed;
+	portTickType start = xTaskGetTickCount();
+	portTickType block = (timeout == 0 ? portMAX_DELAY : timeout / portTICK_RATE_MS);
+	char ch;
+	char *match = response;
+
+	if (!response)
+	{
+		return -ERR_PARAM;
+	}
+
+	while (*match != '\0')
+	{
+		portBASE_TYPE result = xQueueReceive(xQueue, &ch, block);
+
+		if (result)
+		{
+			if (ch != *match++)
+			{
+				match = response;
+			}
+
+			if (block != portMAX_DELAY)
+			{
+				elapsed = xTaskGetTickCount() - start;
+
+				if (elapsed < timeout)
+				{
+					block = (timeout - elapsed) / portTICK_RATE_MS;
+				}
+				else
+				{
+					return -ERR_TIMEOUT;
+				}
+			}
+		}
+		else
+		{
+			return -ERR_TIMEOUT;
+		}
+	}
+
+	return 0;
 }
 
 /**
@@ -111,7 +207,7 @@ void NVIC_Configuration(void)
 	/* Enable the USART1 Interrupt */
 	NVIC_InitStructure.NVIC_IRQChannel = USART1_IRQn;
 	NVIC_InitStructure.NVIC_IRQChannelPreemptionPriority = USART_NVIC_PRIO;
-	NVIC_InitStructure.NVIC_IRQChannelSubPriority = 1;
+	NVIC_InitStructure.NVIC_IRQChannelSubPriority = 0;
 	NVIC_InitStructure.NVIC_IRQChannelCmd = ENABLE;
 	NVIC_Init(&NVIC_InitStructure);
 
@@ -182,14 +278,33 @@ void USART2_IRQHandler(void)
 {
 	if(USART_GetITStatus(USART2, USART_IT_RXNE) != RESET)
 	{
+		uint16_t ch;
+		portBASE_TYPE xHigherPriorityTaskWoken;
+
+		/* Read one character and enqueue */
+		ch = USART_ReceiveData(USART2);
+		xQueueSendToBackFromISR(xQueue, &ch, &xHigherPriorityTaskWoken);
+
 		/* Clear interrupt */
 		USART_ClearITPendingBit(USART2, USART_IT_RXNE);
 
 		if (USART_GetFlagStatus(USART1, USART_FLAG_TXE) != RESET)
 		{
-			/* Read one byte from the receive data register */
-			uint16_t ch = USART_ReceiveData(USART2);
 			USART_SendData(USART1, ch);
+		}
+	}
+
+	if(USART_GetITStatus(USART2, USART_IT_TXE) != RESET)
+	{
+		if (txSize)
+		{
+			USART_SendData(USART2, txBuffer[txIndex++]);
+			txSize--;
+		}
+		else
+		{
+			/* Disable transmit empty interrupt */
+			USART_ITConfig(USART2, USART_IT_TXE, DISABLE);
 		}
 	}
 }
