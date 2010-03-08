@@ -31,7 +31,7 @@
  * @param  None
  * @retval None
  */
-int Buzzer_Configuration(void);
+int Buzzer_Configuration(uint16_t frequency);
 
 /**
  * @brief  Sets the on duration of the buzzer

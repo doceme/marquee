@@ -39,7 +39,7 @@ typedef enum NetworkState
 #endif
 
 /* Definitions */
-#define DEBUG
+//#define DEBUG
 #define BUSY_BIT_MARQUEE	0
 
 /* Global Variables */
@@ -301,21 +301,12 @@ void vApplicationIdleHook(void)
 		/* Wait until last write operation on RTC registers has finished */
 		RTC_WaitForLastTask();
 
-		while (USART_GetFlagStatus(USART1, USART_FLAG_TXE) == RESET);
-		USART_SendData(USART1, 'S');
-		while (USART_GetFlagStatus(USART1, USART_FLAG_TC) == RESET);
-
 		/* Request to enter STOP mode with regulator in low power mode*/
 		PWR_EnterSTOPMode(PWR_Regulator_LowPower, PWR_STOPEntry_WFI);
 
 		/* Configures system clock after wake-up from STOP: enable HSE, PLL and select
 		   PLL as system clock source (HSE and PLL are disabled in STOP mode) */
 		SYSCLKConfig_STOP();
-
-		/* At this stage the system has resumed from STOP mode */
-		while (USART_GetFlagStatus(USART1, USART_FLAG_TXE) == RESET);
-		USART_SendData(USART1, 'A');
-		while (USART_GetFlagStatus(USART1, USART_FLAG_TC) == RESET);
 
 		if (!program)
 			vTaskResume(xMainTask);
@@ -376,7 +367,8 @@ void Main_Task(void *pvParameters)
 	/* Initialise the xLastExecutionTime variable on task entry */
 	xLastWakeTime = xTaskGetTickCount();
 
-	result = Buzzer_Configuration();
+	/* Set buzzer to 4KHz */
+	result = Buzzer_Configuration(4000);
 	assert_param(result >= 0);
 
 	//result = LED_Configuration();
@@ -388,12 +380,10 @@ void Main_Task(void *pvParameters)
 	for(;;)
 	{
 		BUSY(MARQUEE);
-		//while (USART_GetFlagStatus(USART1, USART_FLAG_TXE) == RESET);
-		//USART_SendData(USART1, 'W');
 
 		result = Network_SendCommand("AT+i\r", "foo", 3000);
 
-		if (result)
+		if (result == -ERR_TIMEOUT)
 		{
 			Buzzer_Beep(1);
 		}
@@ -402,7 +392,14 @@ void Main_Task(void *pvParameters)
 #ifndef DEBUG
 		vTaskSuspend(NULL);
 #else
-		vTaskDelay(3000 / portTICK_RATE_MS);
+		if (program)
+		{
+			vTaskSuspend(NULL);
+		}
+		else
+		{
+			vTaskDelay(3000 / portTICK_RATE_MS);
+		}
 #endif
 	}
 }

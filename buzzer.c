@@ -32,119 +32,83 @@
 
 #define DEFAULT_BEEP_DURATION	100 /* 500ms = 1/2 second */
 
-#define BUZZER_APB1_PERIPH 	RCC_APB1Periph_TIM3
-#define BUZZER_APB2_PERIPH 	RCC_APB2Periph_GPIOC | RCC_APB2Periph_AFIO
+#define BUZZER_APB1_PERIPH 	RCC_APB1Periph_TIM4
+#define BUZZER_APB2_PERIPH 	RCC_APB2Periph_TIM8 | RCC_APB2Periph_GPIOC | RCC_APB2Periph_AFIO
 
 #define BUZZER_GPIO		GPIOC
 #define BUZZER_GPIO_PIN		GPIO_Pin_6
 #define BUZZER_GPIO_SPEED	GPIO_Speed_50MHz
 #define BUZZER_GPIO_MODE	GPIO_Mode_AF_PP
-#define BUZZER_GPIO_REMAP 	GPIO_FullRemap_TIM3
+#define BUZZER_PWM_IRQn		TIM8_UP_IRQn
+#define BUZZER_TOGGLE_IRQn	TIM4_IRQn
+#define BUZZER_IT		TIM_IT_Update
+#define BUZZER_OC_INIT		TIM_OC1Init
+#define BUZZER_PRELOAD_CONFIG	TIM_OC1PreloadConfig
 
-#define BUZZER_TIMER		TIM3
+#define BUZZER_PWM_TIMER		TIM8
+#define BUZZER_TOGGLE_TIMER		TIM4
 
 #define BUSY_BIT_BUZZER		1
 
-//#define USE_TASK
-#define USE_IRQ
-
 /* Local Variables */
-#ifdef USE_TASK
-static volatile uint8_t beepCount = 0;
-static xTaskHandle xBuzzerTask = NULL;
-#endif
-static uint32_t onDuration = DEFAULT_BEEP_DURATION / portTICK_RATE_MS;
-static uint32_t offDuration = DEFAULT_BEEP_DURATION / portTICK_RATE_MS;
-
-static TIM_TimeBaseInitTypeDef  TIM_TimeBaseStructure;
-static TIM_OCInitTypeDef  TIM_OCInitStructure;
-static uint16_t CCR1_Val = 500; // 50% duty cycle
+static volatile uint32_t beepCount = 0;
+static uint32_t onDuration = DEFAULT_BEEP_DURATION;
+static uint32_t offDuration = DEFAULT_BEEP_DURATION;
+static uint32_t curOnDuration;
+static uint32_t curOffDuration;
 
 /* Function Prototypes */
 static void RCC_Configuration(void);
 static void GPIO_Configuration(void);
 static void NVIC_Configuration(void);
-static void Timer_Configuration(void);
-#ifdef USE_TASK
-static void Buzzer_Task(void *pvParameters);
-#endif
+static void Timer_Configuration(uint16_t frequency);
 
-int Buzzer_Configuration(void)
+int Buzzer_Configuration(uint16_t frequency)
 {
-#ifdef USE_TASK
-	if (xBuzzerTask)
-		return -ERR_EXIST;
-#endif
-
 	RCC_Configuration();
 	GPIO_Configuration();
 	NVIC_Configuration();
-	Timer_Configuration();
-
-#ifdef USE_TASK
-	/* Create a FreeRTOS task */
-	xTaskCreate(Buzzer_Task, (signed portCHAR *)"Buzzer", configMINIMAL_STACK_SIZE , NULL, tskIDLE_PRIORITY + 2, &xBuzzerTask);
-	assert_param(xBuzzerTask);
-#endif
+	Timer_Configuration(frequency);
 
 	return 0;
 }
 
 int Buzzer_SetOnDuration(uint32_t duration)
 {
-	onDuration = duration / portTICK_RATE_MS;
+	while (Buzzer_IsBeeping());
+	onDuration = duration;
 	return 0;
 }
 
 int Buzzer_SetOffDuration(uint32_t duration)
 {
-	offDuration = duration / portTICK_RATE_MS;
+	while (Buzzer_IsBeeping());
+	offDuration = duration;
 	return 0;
 }
 
 int Buzzer_Beep(uint32_t count)
 {
-#if defined(USE_TASK)
 	BUSY(BUZZER);
-	if (xBuzzerTask)
-	{
-		beepCount = count;
-		vTaskResume(xBuzzerTask);
-		return 0;
-	}
-	else
-	{
-		return -ERR_NOINIT;
-	}
-#elif defined(USE_IRQ)
-#else
-	for(; count > 0; count--)
-	{
-		/* Timer enable counter */
-		TIM_Cmd(BUZZER_TIMER, ENABLE);
-		//vTaskDelayUntil(&xLastWakeTime, onDuration);
-		vTaskDelay(onDuration);
+	beepCount = count;
+	curOnDuration = onDuration;
+	curOffDuration = offDuration;
 
-		/* Timer disable counter */
-		TIM_Cmd(BUZZER_TIMER, DISABLE);
+	/* Enable toggle timer interrupt */
+	TIM_ITConfig(BUZZER_TOGGLE_TIMER, BUZZER_IT, ENABLE);
 
-		if (count > 1)
-		{
-			//vTaskDelayUntil(&xLastWakeTime, offDuration);
-			vTaskDelay(offDuration);
-		}
-	}
+	/* Enable PWM output */
+	TIM_CtrlPWMOutputs(BUZZER_PWM_TIMER, ENABLE);
+
+	/* Enable timer counters */
+	TIM_Cmd(BUZZER_PWM_TIMER, ENABLE);
+	TIM_Cmd(BUZZER_TOGGLE_TIMER, ENABLE);
 	return 0;
-#endif
 }
 
-int Buzzer_IsBeeping(void)
+inline int Buzzer_IsBeeping(void)
 {
-#ifdef USE_TASK
 	return (beepCount == 0 ? 0 : 1);
-#else
-	return 0;
-#endif
 }
 
 /**
@@ -196,7 +160,7 @@ void NVIC_Configuration(void)
 	NVIC_InitTypeDef NVIC_InitStructure;
 
 	/* Enable the buzzer Interrupt */
-	NVIC_InitStructure.NVIC_IRQChannel = TIM3_IRQn;
+	NVIC_InitStructure.NVIC_IRQChannel = BUZZER_TOGGLE_IRQn;
 	NVIC_InitStructure.NVIC_IRQChannelPreemptionPriority = BUZZER_NVIC_PRIO;
 	NVIC_InitStructure.NVIC_IRQChannelSubPriority = 0;
 	NVIC_InitStructure.NVIC_IRQChannelCmd = ENABLE;
@@ -208,65 +172,99 @@ void NVIC_Configuration(void)
  * @param  None
  * @retval None
  */
-void Timer_Configuration(void)
+void Timer_Configuration(uint16_t frequency)
 {
+	TIM_TimeBaseInitTypeDef TIM_TimeBaseStructure;
+	TIM_OCInitTypeDef TIM_OCInitStructure;
+	RCC_ClocksTypeDef RCC_ClockFreq;
+	uint16_t CCR_Val;
 
-	/* Time base configuration */
-	TIM_TimeBaseStructure.TIM_Period = 999;
-	TIM_TimeBaseStructure.TIM_Prescaler = 17; /* 72MHz / ((17 + 1) * 1000) = 4KHz */
+	/* Set CCR value based on PCLK1 frequency and desired buzzer frequency */
+	RCC_GetClocksFreq(&RCC_ClockFreq);
+	CCR_Val = (RCC_ClockFreq.PCLK1_Frequency / frequency);
+
+	/* PWM timer base configuration */
+	TIM_TimeBaseStructInit(&TIM_TimeBaseStructure);
+	TIM_TimeBaseStructure.TIM_Period = (CCR_Val * 2) - 1;
+	TIM_TimeBaseStructure.TIM_Prescaler = 0;
 	TIM_TimeBaseStructure.TIM_ClockDivision = 0;
 	TIM_TimeBaseStructure.TIM_CounterMode = TIM_CounterMode_Up;
+	TIM_TimeBaseInit(BUZZER_PWM_TIMER, &TIM_TimeBaseStructure);
 
-	TIM_TimeBaseInit(BUZZER_TIMER, &TIM_TimeBaseStructure);
+	/* Toggle timer base configuration */
+	TIM_TimeBaseStructInit(&TIM_TimeBaseStructure);
+	TIM_TimeBaseStructure.TIM_Period = (RCC_ClockFreq.PCLK1_Frequency / 1000) - 1;
+	TIM_TimeBaseStructure.TIM_Prescaler = 1;
+	TIM_TimeBaseStructure.TIM_ClockDivision = TIM_CKD_DIV4;
+	TIM_TimeBaseStructure.TIM_CounterMode = TIM_CounterMode_Up;
+	TIM_TimeBaseInit(BUZZER_TOGGLE_TIMER, &TIM_TimeBaseStructure);
 
 	/* PWM1 Mode configuration: Channel1 */
 	TIM_OCInitStructure.TIM_OCMode = TIM_OCMode_PWM1;
 	TIM_OCInitStructure.TIM_OutputState = TIM_OutputState_Enable;
-	TIM_OCInitStructure.TIM_Pulse = CCR1_Val;
+	TIM_OCInitStructure.TIM_OutputNState = TIM_OutputState_Enable;
+	TIM_OCInitStructure.TIM_Pulse = CCR_Val - 1;
 	TIM_OCInitStructure.TIM_OCPolarity = TIM_OCPolarity_High;
-	TIM_OC1Init(BUZZER_TIMER, &TIM_OCInitStructure);
+	TIM_OCInitStructure.TIM_OCNPolarity = TIM_OCPolarity_High;
+	TIM_OCInitStructure.TIM_OCIdleState = TIM_OCIdleState_Set;
+	TIM_OCInitStructure.TIM_OCNIdleState = TIM_OCIdleState_Set;
+	BUZZER_OC_INIT(BUZZER_PWM_TIMER, &TIM_OCInitStructure);
 
-	TIM_OC1PreloadConfig(BUZZER_TIMER, TIM_OCPreload_Enable);
-	TIM_ARRPreloadConfig(BUZZER_TIMER, ENABLE);
+	BUZZER_PRELOAD_CONFIG(BUZZER_PWM_TIMER, TIM_OCPreload_Enable);
 
-	/* Enable timer interrupt */
-	TIM_ITConfig(BUZZER_TIMER, TIM_IT_CC1, ENABLE);
+	TIM_ARRPreloadConfig(BUZZER_PWM_TIMER, ENABLE);
+
+	/* Disable PWM output */
+	TIM_CtrlPWMOutputs(BUZZER_PWM_TIMER, DISABLE);
+
+	/* Disable timer counters */
+	TIM_Cmd(BUZZER_PWM_TIMER, DISABLE);
+	TIM_Cmd(BUZZER_TOGGLE_TIMER, DISABLE);
 }
 
-#ifdef USE_TASK
-void Buzzer_Task(void *pvParameters)
+void TIM4_IRQHandler(void)
 {
-	portTickType xLastWakeTime;
-
-	/* Initialise the xLastExecutionTime variable on task entry */
-	xLastWakeTime = xTaskGetTickCount();
-
-	for(;;)
+	if (TIM_GetITStatus(BUZZER_TOGGLE_TIMER, BUZZER_IT) != RESET)
 	{
-		vTaskSuspend(NULL);
-		for(; beepCount > 0; beepCount--)
+		if (beepCount)
 		{
-			/* Timer enable counter */
-			TIM_Cmd(BUZZER_TIMER, ENABLE);
-			vTaskDelayUntil(&xLastWakeTime, onDuration);
+			if (curOnDuration)
+			{
+				curOnDuration--;
+			}
+			else if (curOffDuration)
+			{
+				if (curOffDuration == offDuration)
+				{
+					TIM_CtrlPWMOutputs(BUZZER_PWM_TIMER, DISABLE);
+				}
 
-			/* Timer disable counter */
-			TIM_Cmd(BUZZER_TIMER, DISABLE);
+				curOffDuration--;
+			}
+			else
+			{
+				beepCount--;
 
-			if (beepCount > 1)
-				vTaskDelayUntil(&xLastWakeTime, offDuration);
+				if (beepCount)
+				{
+					curOnDuration = onDuration;
+					curOffDuration = offDuration;
+					TIM_CtrlPWMOutputs(BUZZER_PWM_TIMER, ENABLE);
+				}
+			}
+		}
+		else
+		{
+			/* Disable timer interrupt */
+			TIM_ITConfig(BUZZER_PWM_TIMER, BUZZER_IT, DISABLE);
+
+			/* Disable timer counters */
+			TIM_Cmd(BUZZER_PWM_TIMER, DISABLE);
+			TIM_Cmd(BUZZER_TOGGLE_TIMER, DISABLE);
+			IDLE_ISR(BUZZER);
 		}
 
-		IDLE(BUZZER);
-	}
-}
-#endif
-
-void TIM3_IRQHandler(void)
-{
-	if (TIM_GetITStatus(BUZZER_TIMER, TIM_IT_CC1) != RESET)
-	{
-		TIM_ClearITPendingBit(BUZZER_TIMER, TIM_IT_CC1);
+		TIM_ClearITPendingBit(BUZZER_TOGGLE_TIMER, BUZZER_IT);
 	}
 }
 

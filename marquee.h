@@ -46,6 +46,8 @@
 #define BUSY_BIT(b) BUSY_BIT_##b
 #define BUSY(b)			do { xSemaphoreTake(xBusyMutex, portMAX_DELAY); busy |= (1 << BUSY_BIT(b)); xSemaphoreGive(xBusyMutex); } while (0)
 #define IDLE(b)			do { xSemaphoreTake(xBusyMutex, portMAX_DELAY); busy &= ~(1 << BUSY_BIT(b)); xSemaphoreGive(xBusyMutex); } while (0)
+#define BUSY_ISR(b)			do { busy |= (1 << BUSY_BIT(b)); } while (0)
+#define IDLE_ISR(b)			do { busy &= ~(1 << BUSY_BIT(b)); } while (0)
 
 extern xSemaphoreHandle xBusyMutex;
 extern volatile uint32_t busy;
