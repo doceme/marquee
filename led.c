@@ -35,20 +35,22 @@
 #define LED_NUM_LINES 2
 #define LED_BUFFER_SIZE		24
 
-#define LED_DE_DP016
+//#define LED_DE_DP016
 
 #define MAX_CHARS_5X7		6
 
 #define SPI_CS_LOW	while (SPI_I2S_GetFlagStatus(SPI, SPI_I2S_FLAG_TXE) == RESET); \
-				GPIO_ResetBits(SPI_GPIO, SPI_PIN_CS);
+				GPIO_ResetBits(SPI_GPIO_CS, SPI_PIN_CS);
 #define SPI_CS_HIGH	while (SPI_I2S_GetFlagStatus(SPI, SPI_I2S_FLAG_BSY) == SET); \
-				GPIO_SetBits(SPI_GPIO, SPI_PIN_CS);
+				GPIO_SetBits(SPI_GPIO_CS, SPI_PIN_CS);
 
 #define SPI			SPI2
 #define SPI_CLK			RCC_APB1Periph_SPI2
 #define SPI_GPIO		GPIOB
+#define SPI_GPIO_CS		GPIOC
 #define SPI_GPIO_CLK		RCC_APB2Periph_GPIOB
-#define SPI_PIN_CS		GPIO_Pin_12
+#define SPI_GPIO_CS_CLK		RCC_APB2Periph_GPIOC
+#define SPI_PIN_CS		GPIO_Pin_0
 #define SPI_PIN_SCK		GPIO_Pin_13
 #define SPI_PIN_MISO		GPIO_Pin_14
 #define SPI_PIN_MOSI		GPIO_Pin_15
@@ -75,15 +77,15 @@ int LED_Configuration(void)
 	LED_WriteCommand(0x01);
 	LED_WriteCommand(0x03);
 	LED_WriteCommand(0x08);
-	LED_WriteCommand(0x2c);
-	LED_WriteCommand(0xaf);
+	LED_WriteCommand(0x24);
+	LED_WriteCommand(0xa7);
 
 	for (i = 0; i < 96; i++)
 	{
 		LED_WriteData(i, 0x0);
 	}
 
-#if 0
+#if 1
 	LED_SetLine(0, "LED");
 	LED_SetLine(1, "Test");
 	LED_Refresh();
@@ -154,10 +156,10 @@ int LED_Refresh(void)
 #ifndef LED_DE_DP016
 	for (j = 0; j < LED_BUFFER_SIZE; j++)
 	{
-		LED_WriteData(i++, (line0[j]) & 0xf);
 		LED_WriteData(i++, (line0[j] >> 4) & 0xf);
-		LED_WriteData(i++, (line1[j]) & 0xf);
+		LED_WriteData(i++, (line0[j]) & 0xf);
 		LED_WriteData(i++, (line1[j] >> 4) & 0xf);
+		LED_WriteData(i++, (line1[j]) & 0xf);
 	}
 #else
 	for (i = 0x1f, j = 0; i >= 1; i-=4, j++)
@@ -194,7 +196,7 @@ int LED_Refresh(void)
 void RCC_Configuration(void)
 {
 	/* Enable GPIOC peripheral clock */
-	RCC_APB2PeriphClockCmd(SPI_GPIO_CLK | RCC_APB2Periph_AFIO, ENABLE);
+	RCC_APB2PeriphClockCmd(SPI_GPIO_CLK | SPI_GPIO_CS_CLK | RCC_APB2Periph_AFIO, ENABLE);
 
 	/* Enable SPI2 Periph clock */
 	RCC_APB1PeriphClockCmd(SPI_CLK, ENABLE);
@@ -213,7 +215,7 @@ void GPIO_Configuration(void)
 	GPIO_InitStructure.GPIO_Pin = SPI_PIN_CS;
 	GPIO_InitStructure.GPIO_Speed = GPIO_Speed_50MHz;
 	GPIO_InitStructure.GPIO_Mode = GPIO_Mode_Out_PP;
-	GPIO_Init(SPI_GPIO, &GPIO_InitStructure);
+	GPIO_Init(SPI_GPIO_CS, &GPIO_InitStructure);
 
 	/* Configure SPI pins: SCK, MISO and MOSI */
 	GPIO_InitStructure.GPIO_Pin = SPI_PIN_SCK | SPI_PIN_MISO | SPI_PIN_MOSI;

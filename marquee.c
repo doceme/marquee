@@ -39,7 +39,7 @@ typedef enum NetworkState
 #endif
 
 /* Definitions */
-//#define DEBUG
+#define DEBUG
 #define BUSY_BIT_MARQUEE	0
 
 /* Global Variables */
@@ -371,8 +371,8 @@ void Main_Task(void *pvParameters)
 	result = Buzzer_Configuration(4000);
 	assert_param(result >= 0);
 
-	//result = LED_Configuration();
-	//assert_param(result >= 0);
+	result = LED_Configuration();
+	assert_param(result >= 0);
 
 	result = Network_Configuration();
 	assert_param(result >= 0);
@@ -381,7 +381,7 @@ void Main_Task(void *pvParameters)
 	{
 		BUSY(MARQUEE);
 
-		result = Network_SendCommand("AT+i\r", "foo", 3000);
+		result = Network_SendCommand("AT+i\r", "I/OK", 3000);
 
 		if (result == -ERR_TIMEOUT)
 		{
