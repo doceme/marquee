@@ -38,6 +38,7 @@
 //#define LED_DE_DP016
 
 #define MAX_CHARS_5X7		6
+#define CHAR_WIDTH_5X7		5
 
 #define SPI_CS_LOW	while (SPI_I2S_GetFlagStatus(SPI, SPI_I2S_FLAG_TXE) == RESET); \
 				GPIO_ResetBits(SPI_GPIO_CS, SPI_PIN_CS);
@@ -97,6 +98,7 @@ int LED_Configuration(void)
 int LED_SetLine(uint8_t line, char *message)
 {
 	uint8_t i = 0;
+	uint8_t j;
 	uint8_t *buffer = lines[line];
 
 	if (message && line >= LED_NUM_LINES)
@@ -110,33 +112,21 @@ int LED_SetLine(uint8_t line, char *message)
 
 	while ((*message != 0) && (i < 24))
 	{
-		uint32_t value;
-		int k = (char)*message;
-		if (k < 0 || k > 127)
+		unsigned int index = (unsigned char)*message;
+		if (index < 0 || index > 127)
 		{
-			k = 0;
+			index = 0;
 		}
-		k *= 5;
+		else
+		{
+			index *= CHAR_WIDTH_5X7;
+		}
 
-		value = font5x7[k] << 24;
-		asm ("rbit %0, %1;" : "=r" (value) : "r" (value)); /* Bit reverse */
-		buffer[i++] = (uint8_t)value;
+		for (j = 0; j < CHAR_WIDTH_5X7; j++)
+		{
+			buffer[i++] = font5x7[index + j];
+		}
 
-		value = font5x7[k + 1] << 24;
-		asm ("rbit %0, %1;" : "=r" (value) : "r" (value)); /* Bit reverse */
-		buffer[i++] = (uint8_t)value;
-
-		value = font5x7[k + 2] << 24;
-		asm ("rbit %0, %1;" : "=r" (value) : "r" (value)); /* Bit reverse */
-		buffer[i++] = (uint8_t)value;
-
-		value = font5x7[k + 3] << 24;
-		asm ("rbit %0, %1;" : "=r" (value) : "r" (value)); /* Bit reverse */
-		buffer[i++] = (uint8_t)value;
-
-		value = font5x7[k + 4] << 24;
-		asm ("rbit %0, %1;" : "=r" (value) : "r" (value)); /* Bit reverse */
-		buffer[i++] = (uint8_t)value;
 		i++;
 
 		message++;
