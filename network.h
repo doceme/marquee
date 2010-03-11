@@ -46,7 +46,24 @@ int Network_Configuration(void);
  * @retval -ERR_TIMEOUT if response was not received in timeout milliseconds
  * @retval -ERR_GENERIC if the command failed to be sent
  */
-int Network_SendCommand(char *command, char* response, uint32_t timeout);
+int Network_SendWait(char *command, char* response, uint32_t timeout);
+
+/**
+ * @brief  Sends a network command and returns the response string
+ *         between the start character and the end character
+ * @param  command The command to send
+ * @param  start The character before the response string
+ * @param  end The character after the response string
+ * @param  response Pointer to the buffer for storing the response
+ *                  This must be allocated by the caller.
+ * @param  timeout A timeout in milliseconds for which to wait for the response
+ *                 before returning. Waits indefinitely if set to 0.
+ * @retval 0 if successful
+ * @retval -ERR_PARAM if command is NULL
+ * @retval -ERR_TIMEOUT if response was not received in timeout milliseconds
+ * @retval -ERR_GENERIC if the command failed to be sent
+ */
+int Network_SendGetByChar(char *command, char start, char end, char* response, uint32_t timeout);
 
 #endif /* NETWORK_H */
 

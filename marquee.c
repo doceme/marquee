@@ -41,6 +41,9 @@ typedef enum NetworkState
 /* Definitions */
 #define DEBUG
 #define BUSY_BIT_MARQUEE	0
+#define SLEEP_TIME		10
+#define DEFAULT_TIMEOUT		3000
+#define MS_PER_SEC		1000
 
 /* Global Variables */
 volatile uint32_t busy = 0;
@@ -296,7 +299,7 @@ void vApplicationIdleHook(void)
 			return;
 
 		/* Set wakeup time */
-		RTC_SetAlarm(RTC_GetCounter() + 3);
+		RTC_SetAlarm(RTC_GetCounter() + SLEEP_TIME);
 
 		/* Wait until last write operation on RTC registers has finished */
 		RTC_WaitForLastTask();
@@ -363,6 +366,7 @@ void Main_Task(void *pvParameters)
 {
 	int result = 0;
 	portTickType xLastWakeTime;
+	char ip[16];
 
 	/* Initialise the xLastExecutionTime variable on task entry */
 	xLastWakeTime = xTaskGetTickCount();
@@ -381,11 +385,15 @@ void Main_Task(void *pvParameters)
 	{
 		BUSY(MARQUEE);
 
-		result = Network_SendCommand("AT+i\r", "I/OK", 3000);
+		result = Network_SendWait("", "I/OK", DEFAULT_TIMEOUT);
 
 		if (result == -ERR_TIMEOUT)
 		{
 			Buzzer_Beep(1);
+		}
+		else
+		{
+			Network_SendGetByChar("IPA?", '\n', '\r', ip, DEFAULT_TIMEOUT);
 		}
 
 		IDLE(MARQUEE);
@@ -398,7 +406,7 @@ void Main_Task(void *pvParameters)
 		}
 		else
 		{
-			vTaskDelay(3000 / portTICK_RATE_MS);
+			vTaskDelay((SLEEP_TIME * MS_PER_SEC) / portTICK_RATE_MS);
 		}
 #endif
 	}

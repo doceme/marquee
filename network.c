@@ -43,11 +43,14 @@
 
 #define NETWORK_QUEUE_SIZE	16
 #define NETWORK_BUFFER_SIZE	256
+#define NETWORK_CMD_HEADER_SIZE 4
+#define NETWORK_CMD_FOOTER_SIZE 2
 
 /* Local Variables */
 static xQueueHandle xQueue = NULL;
 
-static uint8_t txBuffer[NETWORK_BUFFER_SIZE];
+/* One extra bytes for null terminator for debug purposes */
+static uint8_t txBuffer[NETWORK_BUFFER_SIZE + 1];
 static uint32_t txIndex;
 static uint32_t txSize;
 
@@ -56,7 +59,9 @@ static void RCC_Configuration(void);
 static void GPIO_Configuration(void);
 static void NVIC_Configuration(void);
 static void USART_Configuration(void);
+static int SendCommand(char *command, uint32_t timeout);
 static int WaitForResponse(char* response, uint32_t timeout);
+static int GetResponse(char start, char end, char* response, uint32_t timeout);
 
 int Network_Configuration(void)
 {
@@ -70,13 +75,53 @@ int Network_Configuration(void)
 
 	return 0;
 }
-int Network_SendCommand(char *command, char* response, uint32_t timeout)
+
+int Network_SendWait(char *command, char* response, uint32_t timeout)
 {
-	int result = 0;
-	int i = 0;
-	uint8_t *ch = txBuffer;
+	int result;
+
+	if (!command)
+	{
+		return -ERR_PARAM;
+	}
+
+	result = SendCommand(command, timeout);
+
+	if (result == 0 && response)
+	{
+		/* Wait for response */
+		result = WaitForResponse(response, timeout);
+	}
+
+	return result;
+}
+
+int Network_SendGetByChar(char *command, char start, char end, char* response, uint32_t timeout)
+{
+	int result;
 
 	if (!command || !response)
+	{
+		return -ERR_PARAM;
+	}
+
+	result = SendCommand(command, timeout);
+
+	if (result == 0)
+	{
+		/* Get the response */
+		result = GetResponse(start, end, response, timeout);
+	}
+
+	return result;
+}
+
+int SendCommand(char *command, uint32_t timeout)
+{
+	int result = 0;
+	uint8_t *ch = txBuffer + NETWORK_CMD_HEADER_SIZE;
+
+	if (!command)
 	{
 		return -ERR_PARAM;
 	}
@@ -90,24 +135,30 @@ int Network_SendCommand(char *command, char* response, uint32_t timeout)
 	{
 		*ch++ = *command++;
 
-		if (++txSize >= (NETWORK_BUFFER_SIZE - 1))
+		if (++txSize >= (NETWORK_BUFFER_SIZE - (NETWORK_CMD_HEADER_SIZE + NETWORK_CMD_FOOTER_SIZE)))
 		{
 			return -ERR_OVERFLOW;
 		}
 	}
 
+	/* Add footer bytes */
+	*ch++ = '\r';
+	*ch++ = '\n';
 	*ch = '\0';
+
+	ch = txBuffer;
+
+	/* Add header bytes */
+	*ch++ = 'A';
+	*ch++ = 'T';
+	*ch++ = '+';
+	*ch++ = 'i';
+	txSize += NETWORK_CMD_HEADER_SIZE + NETWORK_CMD_FOOTER_SIZE;
 
 	/* Enable transmit empty interrupt */
 	USART_ITConfig(USART2, USART_IT_TXE, ENABLE);
 
 	portEXIT_CRITICAL();
-
-	/* Wait for response */
-	if (response)
-	{
-		result = WaitForResponse(response, timeout);
-	}
 
 	return result;
 }
@@ -131,11 +182,52 @@ int WaitForResponse(char* response, uint32_t timeout)
 
 		if (result)
 		{
+			if (block != portMAX_DELAY)
+			{
+				elapsed = xTaskGetTickCount() - start;
+
+				if (elapsed < timeout)
+				{
+					block = (timeout - elapsed) / portTICK_RATE_MS;
+				}
+				else
+				{
+					return -ERR_TIMEOUT;
+				}
+			}
+
 			if (ch != *match++)
 			{
 				match = response;
 			}
+		}
+		else
+		{
+			return -ERR_TIMEOUT;
+		}
+	}
 
+	return 0;
+}
+
+int GetResponse(char start_ch, char end_ch, char* response, uint32_t timeout)
+{
+	portTickType elapsed;
+	portTickType start = xTaskGetTickCount();
+	portTickType block = (timeout == 0 ? portMAX_DELAY : timeout / portTICK_RATE_MS);
+	char ch;
+
+	if (!response)
+	{
+		return -ERR_PARAM;
+	}
+
+	do
+	{
+		portBASE_TYPE result = xQueueReceive(xQueue, &ch, block);
+
+		if (result)
+		{
 			if (block != portMAX_DELAY)
 			{
 				elapsed = xTaskGetTickCount() - start;
@@ -154,8 +246,61 @@ int WaitForResponse(char* response, uint32_t timeout)
 		{
 			return -ERR_TIMEOUT;
 		}
+	} while (ch != start_ch);
+
+	portBASE_TYPE result = xQueueReceive(xQueue, &ch, block);
+
+	if (result)
+	{
+		while (ch != end_ch)
+		{
+			*response++ = ch;
+
+			portBASE_TYPE result = xQueueReceive(xQueue, &ch, block);
+
+			if (result)
+			{
+				if (block != portMAX_DELAY)
+				{
+					elapsed = xTaskGetTickCount() - start;
+
+					if (elapsed < timeout)
+					{
+						block = (timeout - elapsed) / portTICK_RATE_MS;
+					}
+					else
+					{
+						return -ERR_TIMEOUT;
+					}
+				}
+			}
+			else
+			{
+				return -ERR_TIMEOUT;
+			}
+		}
+
+		if (block != portMAX_DELAY)
+		{
+			elapsed = xTaskGetTickCount() - start;
+
+			if (elapsed < timeout)
+			{
+				block = (timeout - elapsed) / portTICK_RATE_MS;
+			}
+			else
+			{
+				return -ERR_TIMEOUT;
+			}
+		}
+	}
+	else
+	{
+		return -ERR_TIMEOUT;
 	}
 
+	/* Null terminate the response */
+	*response = '\0';
 	return 0;
 }
 
