@@ -26,6 +26,7 @@
 /* Includes */
 #include "marquee.h"
 #include "common.h"
+#include "tprintf.h"
 #include "buzzer.h"
 #include "led.h"
 #include "network.h"
@@ -67,12 +68,20 @@ static void Main_Task(void *pvParameters);
 
 void assert_failed(uint8_t *function, uint32_t line)
 {
-#if 1
-	while (USART_GetFlagStatus(USART1, USART_FLAG_TXE) == RESET);
-	USART_SendData(USART1, '!');
-	while (USART_GetFlagStatus(USART1, USART_FLAG_TC) == RESET);
-#endif
+	tprintf("!\r\n");
 	while (1);
+}
+
+/**
+ * @brief  Retargets the C library printf function to the USART.
+ * @param  None
+ * @retval None
+ */
+int outbyte(int ch)
+{
+	USART_SendData(USART1, (uint8_t)ch);
+	while (USART_GetFlagStatus(USART1, USART_FLAG_TC) == RESET);
+	return ch;
 }
 
 /**
@@ -85,6 +94,9 @@ int main()
 	EXTI_Configuration();
 	RTC_Configuration();
 	NVIC_Configuration();
+
+	/* Wait for transmit enable flag to be set for debug prints */
+	while (USART_GetFlagStatus(USART1, USART_FLAG_TXE) == RESET);
 
 	xBusyMutex = xSemaphoreCreateMutex();
 	assert_param(xBusyMutex);
@@ -390,6 +402,7 @@ void Main_Task(void *pvParameters)
 		if (result == -ERR_TIMEOUT)
 		{
 			Buzzer_Beep(1);
+			tprintf("Timeout!\n");
 		}
 		else
 		{

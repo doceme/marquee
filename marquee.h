@@ -31,7 +31,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdarg.h>
-#include <string.h>
 
 /* STM32 standard peripheral library */
 #include <stm32f10x.h>

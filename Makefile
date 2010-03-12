@@ -75,6 +75,7 @@ SRC =  $(TARGET).c
 SRC += buzzer.c
 SRC += network.c
 SRC += led.c
+SRC += tprintf.c
 SRC += stm32f10x_it.c
 
 ## CMSIS for STM32
