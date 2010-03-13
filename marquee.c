@@ -79,6 +79,7 @@ void assert_failed(uint8_t *function, uint32_t line)
  */
 int outbyte(int ch)
 {
+	while (USART_GetFlagStatus(USART1, USART_FLAG_TXE) == RESET);
 	USART_SendData(USART1, (uint8_t)ch);
 	while (USART_GetFlagStatus(USART1, USART_FLAG_TC) == RESET);
 	return ch;
@@ -94,9 +95,6 @@ int main()
 	EXTI_Configuration();
 	RTC_Configuration();
 	NVIC_Configuration();
-
-	/* Wait for transmit enable flag to be set for debug prints */
-	while (USART_GetFlagStatus(USART1, USART_FLAG_TXE) == RESET);
 
 	xBusyMutex = xSemaphoreCreateMutex();
 	assert_param(xBusyMutex);
@@ -402,11 +400,11 @@ void Main_Task(void *pvParameters)
 		if (result == -ERR_TIMEOUT)
 		{
 			Buzzer_Beep(1);
-			tprintf("Timeout!\n");
 		}
 		else
 		{
 			Network_SendGetByChar("IPA?", '\n', '\r', ip, DEFAULT_TIMEOUT);
+			tprintf("Success!\r\n");
 		}
 
 		IDLE(MARQUEE);
