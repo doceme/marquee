@@ -37,6 +37,7 @@
 #define ERR_PARAM	5 /* Invalid parameter */
 #define ERR_TIMEOUT	6 /* Timeout */
 #define ERR_OVERFLOW	7 /* Overflow */
+#define ERR_NOCONNECT	8 /* Not connected */
 
 #define IRQ_PRIO_LOW				12		// lower than RTOS
 #define IRQ_PRIO_MID				8		// higher than RTOS

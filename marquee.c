@@ -30,14 +30,14 @@
 #include "buzzer.h"
 #include "led.h"
 #include "network.h"
+#include "string.h"
 
-#if 0
 typedef enum NetworkState
 {
 	NotConnected,
-	Connected
+	Connected,
+	Online
 } NetworkState;
-#endif
 
 /* Definitions */
 #define DEBUG
@@ -53,7 +53,13 @@ xSemaphoreHandle xBusyMutex = NULL;
 /* Local Variables */
 static volatile uint8_t program = 0;
 static xTaskHandle xMainTask = NULL;
-//static NetworkState networkState = NotConnected;
+static NetworkState networkState = NotConnected;
+static NetworkWlanConnection_t networkConnection;
+static char response[80];
+
+#if 0
+static xQueueHandle xQueue = NULL;
+#endif
 
 /* Function Prototypes */
 static void RCC_Configuration(void);
@@ -95,9 +101,6 @@ int main()
 	EXTI_Configuration();
 	RTC_Configuration();
 	NVIC_Configuration();
-
-	xBusyMutex = xSemaphoreCreateMutex();
-	assert_param(xBusyMutex);
 
 	/* Create a FreeRTOS task */
 	xTaskCreate(Main_Task, (signed portCHAR *)"Main", configMINIMAL_STACK_SIZE , NULL, tskIDLE_PRIORITY + 1, &xMainTask);
@@ -299,6 +302,18 @@ void SYSCLKConfig_STOP(void)
 }
 #endif
 
+
+/**
+* Stack overflow check hook function
+*/
+void vApplicationStackOverflowHook(xTaskHandle *pxTask, signed portCHAR *pcTaskName)
+{
+	if (pcTaskName)
+		tprintf("Stack overflow! task=%s\r\n");
+
+	while (1);
+}
+
 /**
 * Idle hook function
 */
@@ -335,6 +350,12 @@ void EXTI15_10_IRQHandler(void)
 {
 	if(EXTI_GetITStatus(EXTI_Line11) != RESET)
 	{
+#if 0
+		uint8_t ch = 'A';
+		portBASE_TYPE xHigherPriorityTaskWoken;
+		xQueueSendToBackFromISR(xQueue, &ch, &xHigherPriorityTaskWoken);
+#endif
+
 		program = 1;
 
 		/* Clear the Key Button EXTI line pending bit */
@@ -376,10 +397,12 @@ void Main_Task(void *pvParameters)
 {
 	int result = 0;
 	portTickType xLastWakeTime;
-	char ip[16];
 
 	/* Initialise the xLastExecutionTime variable on task entry */
 	xLastWakeTime = xTaskGetTickCount();
+
+	xBusyMutex = xSemaphoreCreateMutex();
+	assert_param(xBusyMutex);
 
 	/* Set buzzer to 4KHz */
 	result = Buzzer_Configuration(4000);
@@ -391,23 +414,65 @@ void Main_Task(void *pvParameters)
 	result = Network_Configuration();
 	assert_param(result >= 0);
 
+	result = Network_SendWait("E0", "I/OK", DEFAULT_TIMEOUT);
+
+#if 0
+	xQueue = xQueueCreate(10, sizeof(char));
+	assert_param(xQueue);
+#endif
+
 	for(;;)
 	{
-		BUSY(MARQUEE);
-
-		result = Network_SendWait("", "I/OK", DEFAULT_TIMEOUT);
-
-		if (result == -ERR_TIMEOUT)
+#if 0
+		portBASE_TYPE result = xQueueReceive(xQueue, &ch, portMAX_DELAY);
+		if (result)
 		{
-			Buzzer_Beep(1);
+			tprintf("%c\r\n", ch);
 		}
 		else
 		{
-			Network_SendGetByChar("IPA?", '\n', '\r', ip, DEFAULT_TIMEOUT);
-			tprintf("Success!\r\n");
+			tprintf("!result\r\n");
 		}
+#endif
+//		BUSY(MARQUEE);
 
-		IDLE(MARQUEE);
+			if (networkState == NotConnected)
+			{
+				tprintf("#networkState: NotConnected\r\n");
+				//result = Network_SendGetByChar("!RP10", '\n', '\r', response, DEFAULT_TIMEOUT);
+				//result = Network_SendGetLine("!RP10", response, DEFAULT_TIMEOUT);
+				result = Network_GetWlanConnection(&networkConnection, DEFAULT_TIMEOUT);
+
+				if (result == 0)
+				{
+					networkState = Connected;
+#if 0
+					if (strstr(response, "Completed") != NULL)
+					{
+						networkState = Connected;
+					}
+					else
+					{
+						tprintf("#%s!\r\n", response);
+					}
+#endif
+				}
+				else if (result == -ERR_TIMEOUT)
+				{
+					tprintf("#Timeout!\r\n");
+				}
+			}
+
+			if (networkState == Connected)
+			{
+				tprintf("#networkState: Connected\r\n");
+				result = Network_SendGetByChar("IPA?", '\n', '\r', response, DEFAULT_TIMEOUT);
+
+				if (result == -ERR_TIMEOUT)
+					tprintf("#Timeout!\r\n");
+			}
+
+//		IDLE(MARQUEE);
 #ifndef DEBUG
 		vTaskSuspend(NULL);
 #else

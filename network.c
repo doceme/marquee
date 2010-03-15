@@ -27,6 +27,7 @@
 #include "marquee.h"
 #include "common.h"
 #include "network.h"
+#include "string.h"
 
 #define USART_NVIC_PRIO		IRQ_PRIO_HIGHEST
 
@@ -41,10 +42,11 @@
 
 #define NETWORK_USART		USART2
 
-#define NETWORK_QUEUE_SIZE	16
+#define NETWORK_QUEUE_SIZE	256
 #define NETWORK_BUFFER_SIZE	256
 #define NETWORK_CMD_HEADER_SIZE 4
-#define NETWORK_CMD_FOOTER_SIZE 2
+#define NETWORK_CMD_FOOTER_SIZE 1
+#define NETWORK_LINE_MAX_LENGTH 80
 
 /* Local Variables */
 static xQueueHandle xQueue = NULL;
@@ -53,6 +55,7 @@ static xQueueHandle xQueue = NULL;
 static uint8_t txBuffer[NETWORK_BUFFER_SIZE + 1];
 static uint32_t txIndex;
 static uint32_t txSize;
+static char rxLine[NETWORK_LINE_MAX_LENGTH + 1];
 
 /* Function Prototypes */
 static void RCC_Configuration(void);
@@ -62,6 +65,7 @@ static void USART_Configuration(void);
 static int SendCommand(char *command, uint32_t timeout);
 static int WaitForResponse(char* response, uint32_t timeout);
 static int GetResponse(char start, char end, char* response, uint32_t timeout);
+static int GetLine(char* response, uint32_t timeout);
 
 int Network_Configuration(void)
 {
@@ -70,7 +74,7 @@ int Network_Configuration(void)
 	NVIC_Configuration();
 	USART_Configuration();
 
-	xQueue = xQueueCreate(NETWORK_QUEUE_SIZE, sizeof(uint8_t));
+	xQueue = xQueueCreate(NETWORK_QUEUE_SIZE, sizeof(char));
 	assert_param(xQueue);
 
 	return 0;
@@ -116,6 +120,129 @@ int Network_SendGetByChar(char *command, char start, char end, char* response, u
 	return result;
 }
 
+int Network_SendGetLine(char *command, char* response, uint32_t timeout)
+{
+	int result;
+
+	if (!command || !response)
+	{
+		return -ERR_PARAM;
+	}
+
+	result = SendCommand(command, timeout);
+
+	if (result == 0)
+	{
+		/* Get the response */
+		result = GetLine(response, timeout);
+	}
+
+	return result;
+}
+
+int Network_GetWlanConnection(NetworkWlanConnection_t *connection, uint32_t timeout)
+{
+	int result;
+	int i = 0;
+
+	if (connection == NULL)
+		return -ERR_PARAM;
+
+	result = Network_SendGetLine("!RP10", rxLine, timeout);
+
+	if (result > 0)
+	{
+		char *pch = rxLine;
+		char *pcomma = strchr(pch, ',');
+
+		/* Initialize result to report an error in case something goes wrong */
+		result = -ERR_GENERIC;
+
+		while (pcomma++ != NULL)
+		{
+			size_t num = pcomma - pch - 1;
+			switch (i++)
+			{
+				case 0:
+				{
+					strncpy(connection->ssid, pch, num);
+				} break;
+
+				case 1:
+				{
+					strncpy(connection->bssid, pch, num);
+				} break;
+
+				case 2:
+				{
+					if (strncmp(pch, "NONE", num) == 0)
+					{
+						connection->securityType = NETWORK_WLAN_SECURITY_TYPE_NONE;
+					}
+					else if (strncmp(pch, "WEP64", num) == 0)
+					{
+						connection->securityType = NETWORK_WLAN_SECURITY_TYPE_WEP64;
+					}
+					else if (strncmp(pch, "WEP128", num) == 0)
+					{
+						connection->securityType = NETWORK_WLAN_SECURITY_TYPE_WEP128;
+					}
+					else if (strncmp(pch, "WPA", num) == 0)
+					{
+						connection->securityType = NETWORK_WLAN_SECURITY_TYPE_WPA;
+					}
+					else if (strncmp(pch, "WPA2", num) == 0)
+					{
+						connection->securityType = NETWORK_WLAN_SECURITY_TYPE_WPA2;
+					}
+					else
+					{
+						return -ERR_GENERIC;
+					}
+				} break;
+
+				case 3:
+				{
+					if (strncmp(pch, "NotCompleted", num) == 0)
+					{
+						connection->wpaStatus = NETWORK_WLAN_WPA_STATUS_NOTCOMPLETED;
+					}
+					else if (strncmp(pch, "Completed", num) == 0)
+					{
+						connection->wpaStatus = NETWORK_WLAN_WPA_STATUS_COMPLETED;
+					}
+					else
+					{
+						return -ERR_GENERIC;
+					}
+				} break;
+
+				case 4:
+				{
+					connection->channel = atoi(pch);
+
+					pch = pcomma;
+
+					connection->snr = atoi(pch);
+					result = 0;
+				} break;
+
+				default:
+					return -ERR_GENERIC;
+			}
+
+			pch = pcomma;
+			pcomma = strchr(pch, ',');
+		}
+	}
+	else
+	{
+		result = -ERR_NOCONNECT;
+	}
+
+	return result;
+}
+
 int SendCommand(char *command, uint32_t timeout)
 {
 	int result = 0;
@@ -143,7 +270,6 @@ int SendCommand(char *command, uint32_t timeout)
 
 	/* Add footer bytes */
 	*ch++ = '\r';
-	*ch++ = '\n';
 	*ch = '\0';
 
 	ch = txBuffer;
@@ -304,6 +430,83 @@ int GetResponse(char start_ch, char end_ch, char* response, uint32_t timeout)
 	return 0;
 }
 
+int GetLine(char* response, uint32_t timeout)
+{
+	portTickType elapsed;
+	portTickType start = xTaskGetTickCount();
+	portTickType block = (timeout == 0 ? portMAX_DELAY : timeout / portTICK_RATE_MS);
+	portBASE_TYPE result;
+	char ch = '\r';
+	int i = 0;
+
+	if (!response)
+	{
+		return -ERR_PARAM;
+	}
+
+
+	while ((ch == '\r' || ch == '\n') && result)
+	{
+		result = xQueueReceive(xQueue, &ch, block);
+
+		if (result)
+		{
+
+			if (block != portMAX_DELAY)
+			{
+				elapsed = xTaskGetTickCount() - start;
+
+				if (elapsed < timeout)
+				{
+					block = (timeout - elapsed) / portTICK_RATE_MS;
+				}
+				else
+				{
+					return -ERR_TIMEOUT;
+				}
+			}
+		}
+		else
+		{
+			return -ERR_TIMEOUT;
+		}
+	}
+
+	while (ch != '\r' && ch != '\n' && i < NETWORK_LINE_MAX_LENGTH)
+	{
+		rxLine[i++] = ch;
+
+		portBASE_TYPE result = xQueueReceive(xQueue, &ch, block);
+
+		if (result)
+		{
+
+			if (block != portMAX_DELAY)
+			{
+				elapsed = xTaskGetTickCount() - start;
+
+				if (elapsed < timeout)
+				{
+					block = (timeout - elapsed) / portTICK_RATE_MS;
+				}
+				else
+				{
+					return -ERR_TIMEOUT;
+				}
+			}
+		}
+		else
+		{
+			return -ERR_TIMEOUT;
+		}
+	}
+
+	/* Null terminate the response */
+	rxLine[i] = '\0';
+	strcpy(response, rxLine);
+	return i;
+}
+
 /**
  * @brief  Configures the network system clocks
  * @param  None
@@ -423,20 +626,24 @@ void USART2_IRQHandler(void)
 {
 	if(USART_GetITStatus(USART2, USART_IT_RXNE) != RESET)
 	{
-		uint16_t ch;
-		portBASE_TYPE xHigherPriorityTaskWoken;
+		if (xBusyMutex)
+		{
+			portBASE_TYPE xHigherPriorityTaskWoken;
+			char ch;
 
-		/* Read one character and enqueue */
-		ch = USART_ReceiveData(USART2);
-		xQueueSendToBackFromISR(xQueue, &ch, &xHigherPriorityTaskWoken);
+			/* Read one character and enqueue */
+			ch = USART_ReceiveData(USART2);
+			xQueueSendToBackFromISR(xQueue, &ch, &xHigherPriorityTaskWoken);
+
+			if (USART_GetFlagStatus(USART1, USART_FLAG_TXE) != RESET)
+				USART_SendData(USART1, ch);
+
+			if (xHigherPriorityTaskWoken)
+				taskYIELD();
+		}
 
 		/* Clear interrupt */
 		USART_ClearITPendingBit(USART2, USART_IT_RXNE);
-
-		if (USART_GetFlagStatus(USART1, USART_FLAG_TXE) != RESET)
-		{
-			USART_SendData(USART1, ch);
-		}
 	}
 
 	if(USART_GetITStatus(USART2, USART_IT_TXE) != RESET)

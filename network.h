@@ -27,6 +27,37 @@
 #ifndef NETWORK_H
 #define NETWORK_H
 
+/* Definitions */
+#define NETWORK_SSID_NAME_MAX_LENGTH 33
+#define NETWORK_MAC_ADDRESS_MAX_LENGTH 18
+
+/* Enumerations */
+typedef enum NetworkWlanSecurityType_t
+{
+	NETWORK_WLAN_SECURITY_TYPE_NONE,
+	NETWORK_WLAN_SECURITY_TYPE_WEP64,
+	NETWORK_WLAN_SECURITY_TYPE_WEP128,
+	NETWORK_WLAN_SECURITY_TYPE_WPA,
+	NETWORK_WLAN_SECURITY_TYPE_WPA2
+} NetworkWlanSecurityType_t;
+
+typedef enum NetworkWlanWPAStatus_t
+{
+	NETWORK_WLAN_WPA_STATUS_NOTCOMPLETED,
+	NETWORK_WLAN_WPA_STATUS_COMPLETED
+} NetworkWlanWPAStatus_t;
+
+/* Structures */
+typedef struct NetworkWlanConnection_t
+{
+	char ssid[NETWORK_SSID_NAME_MAX_LENGTH];
+	char bssid[NETWORK_MAC_ADDRESS_MAX_LENGTH];
+	NetworkWlanSecurityType_t securityType;
+	NetworkWlanWPAStatus_t wpaStatus;
+	uint8_t channel;
+	uint8_t snr;
+} NetworkWlanConnection_t;
+
 /**
  * @brief  Configures the network
  * @param  None
@@ -64,6 +95,33 @@ int Network_SendWait(char *command, char* response, uint32_t timeout);
  * @retval -ERR_GENERIC if the command failed to be sent
  */
 int Network_SendGetByChar(char *command, char start, char end, char* response, uint32_t timeout);
+
+/**
+ * @brief  Sends a network command and returns the first line of the response
+ * @param  command The command to send
+ * @param  response If not NULL, the first line of the response string
+ *                  NULL if the response was emptu or timeout reached
+ * @param  timeout A timeout in milliseconds for which to wait for the response
+ *                 before returning. Waits indefinitely if set to 0.
+ * @retval If successful, the number of characters in the line
+ * @retval -ERR_PARAM if command is NULL
+ * @retval -ERR_TIMEOUT if response was not received in timeout milliseconds
+ * @retval -ERR_GENERIC if the command failed to be sent
+ */
+int Network_SendGetLine(char *command, char* response, uint32_t timeout);
+
+/**
+ * @brief  Gets the current WLAN connection information
+ * @param  connection Pointer to the returned connection structure
+ * @param  timeout A timeout in milliseconds for which to wait for the response
+ *                 before returning. Waits indefinitely if set to 0.
+ * @retval 0 if successful
+ * @retval -ERR_PARAM if connection is NULL
+ * @retval -ERR_TIMEOUT if response was not received in timeout milliseconds
+ * @retval -ERR_NOCONNECT if the not connected
+ * @retval -ERR_GENERIC if the command failed to be sent
+ */
+int Network_GetWlanConnection(NetworkWlanConnection_t *connection, uint32_t timeout);
 
 #endif /* NETWORK_H */
 
