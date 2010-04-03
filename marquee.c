@@ -34,9 +34,10 @@
 
 typedef enum NetworkState
 {
-	NotConnected,
-	Connected,
-	Online
+	NetworkState_NotConnected,
+	NetworkState_Connected,
+	NetworkState_Online,
+	NetworkState_Last
 } NetworkState;
 
 /* Definitions */
@@ -53,9 +54,11 @@ xSemaphoreHandle xBusyMutex = NULL;
 /* Local Variables */
 static volatile uint8_t program = 0;
 static xTaskHandle xMainTask = NULL;
-static NetworkState networkState = NotConnected;
+static NetworkState networkState = NetworkState_NotConnected;
 static NetworkWlanConnection_t networkConnection;
 static char response[80];
+const static uint32_t sleepDurations[NetworkState_Last] = { 3, 3, 10 };
+static uint32_t sleepDuration;
 
 #if 0
 static xQueueHandle xQueue = NULL;
@@ -324,7 +327,7 @@ void vApplicationIdleHook(void)
 			return;
 
 		/* Set wakeup time */
-		RTC_SetAlarm(RTC_GetCounter() + SLEEP_TIME);
+		RTC_SetAlarm(RTC_GetCounter() + sleepDuration);
 
 		/* Wait until last write operation on RTC registers has finished */
 		RTC_WaitForLastTask();
@@ -396,6 +399,7 @@ void RTCAlarm_IRQHandler(void)
 void Main_Task(void *pvParameters)
 {
 	int result = 0;
+	uint8_t skipOneSleep = 0;
 	portTickType xLastWakeTime;
 
 	/* Initialise the xLastExecutionTime variable on task entry */
@@ -423,6 +427,8 @@ void Main_Task(void *pvParameters)
 
 	for(;;)
 	{
+		skipOneSleep = 0;
+		sleepDuration = sleepDurations[networkState];
 #if 0
 		portBASE_TYPE result = xQueueReceive(xQueue, &ch, portMAX_DELAY);
 		if (result)
@@ -436,7 +442,9 @@ void Main_Task(void *pvParameters)
 #endif
 //		BUSY(MARQUEE);
 
-			if (networkState == NotConnected)
+		switch (networkState)
+		{
+			case NetworkState_NotConnected:
 			{
 				tprintf("#networkState: NotConnected\r\n");
 				//result = Network_SendGetByChar("!RP10", '\n', '\r', response, DEFAULT_TIMEOUT);
@@ -445,7 +453,8 @@ void Main_Task(void *pvParameters)
 
 				if (result == 0)
 				{
-					networkState = Connected;
+					networkState = NetworkState_Connected;
+					skipOneSleep = 1;
 #if 0
 					if (strstr(response, "Completed") != NULL)
 					{
@@ -461,29 +470,62 @@ void Main_Task(void *pvParameters)
 				{
 					tprintf("#Timeout!\r\n");
 				}
-			}
+			} break;
 
-			if (networkState == Connected)
+			case NetworkState_Connected:
 			{
 				tprintf("#networkState: Connected\r\n");
-				result = Network_SendGetByChar("IPA?", '\n', '\r', response, DEFAULT_TIMEOUT);
+				result = Network_GetIPAddress(response, DEFAULT_TIMEOUT);
 
-				if (result == -ERR_TIMEOUT)
+				if (result == 0 && (strcmp(response, "0.0.0.0") != 0))
+				{
+					tprintf("IP: %s\r\n", response);
+					//LED_SetLine(0, "Connected");
+					//LED_SetLine(1, response);
+					//LED_Refresh();
+					networkState = NetworkState_Online;
+					skipOneSleep = 1;
+				}
+				else if (result == -ERR_TIMEOUT)
 					tprintf("#Timeout!\r\n");
-			}
+			} break;
+
+			case NetworkState_Online:
+			{
+				tprintf("#networkState: Online\r\n");
+				result = Network_GetEmail(response, NULL, 10000);
+				if (result == 0)
+				{
+					LED_SetLine(0, response);
+					if (strlen(response) > 20)
+					{
+						LED_SetLine(1, &response[20]);
+					}
+					else
+					{
+						LED_SetLine(1, "");
+					}
+					LED_Refresh();
+					Buzzer_Beep(2);
+					Network_SendWait("!RMM", "I/ONLINE", DEFAULT_TIMEOUT);
+				}
+			} break;
+
+			default:
+				tprintf("#networkState: Invalid\r\n");
+				assert_param(0);
+				break;
+		}
 
 //		IDLE(MARQUEE);
 #ifndef DEBUG
-		vTaskSuspend(NULL);
+		if (!skipOneSleep)
+			vTaskSuspend(NULL);
 #else
 		if (program)
-		{
 			vTaskSuspend(NULL);
-		}
-		else
-		{
-			vTaskDelay((SLEEP_TIME * MS_PER_SEC) / portTICK_RATE_MS);
-		}
+		else if (!skipOneSleep)
+			vTaskDelay((sleepDuration * MS_PER_SEC) / portTICK_RATE_MS);
 #endif
 	}
 }

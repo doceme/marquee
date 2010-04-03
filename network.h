@@ -118,10 +118,33 @@ int Network_SendGetLine(char *command, char* response, uint32_t timeout);
  * @retval 0 if successful
  * @retval -ERR_PARAM if connection is NULL
  * @retval -ERR_TIMEOUT if response was not received in timeout milliseconds
- * @retval -ERR_NOCONNECT if the not connected
+ * @retval -ERR_NOCONNECT if not connected
  * @retval -ERR_GENERIC if the command failed to be sent
  */
 int Network_GetWlanConnection(NetworkWlanConnection_t *connection, uint32_t timeout);
+
+/**
+ * @brief  Gets the current IP Address
+ * @param  address Pointer to the returned IP address
+ * @retval 0 if successful
+ * @retval -ERR_PARAM if address is NULL
+ * @retval -ERR_TIMEOUT if response was not received in timeout milliseconds
+ * @retval -ERR_NOCONNECT if not connected
+ * @retval -ERR_GENERIC if the command failed to be sent
+ */
+int Network_GetIPAddress(char *address, uint32_t timeout);
+
+/**
+ * @brief  Get an email on the server
+ * @param  subject Pointer to the returned email subject
+ * @param  body Pointer to the returned email body
+ * @retval 0 if successful
+ * @retval -ERR_PARAM if subject or body is NULL
+ * @retval -ERR_TIMEOUT if email was not received in timeout milliseconds
+ * @retval -ERR_NOCONNECT if not connected
+ * @retval -ERR_GENERIC if the command failed to be sent
+ */
+int Network_GetEmail(char *subject, char* body, uint32_t timeout);
 
 #endif /* NETWORK_H */
 

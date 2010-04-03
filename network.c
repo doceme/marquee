@@ -27,6 +27,7 @@
 #include "marquee.h"
 #include "common.h"
 #include "network.h"
+#include "tprintf.h"
 #include "string.h"
 
 #define USART_NVIC_PRIO		IRQ_PRIO_HIGHEST
@@ -56,6 +57,7 @@ static uint8_t txBuffer[NETWORK_BUFFER_SIZE + 1];
 static uint32_t txIndex;
 static uint32_t txSize;
 static char rxLine[NETWORK_LINE_MAX_LENGTH + 1];
+static char rxLineAlt[NETWORK_LINE_MAX_LENGTH + 1];
 
 /* Function Prototypes */
 static void RCC_Configuration(void);
@@ -66,6 +68,7 @@ static int SendCommand(char *command, uint32_t timeout);
 static int WaitForResponse(char* response, uint32_t timeout);
 static int GetResponse(char start, char end, char* response, uint32_t timeout);
 static int GetLine(char* response, uint32_t timeout);
+static int WaitForEmailSubject(char *subject, uint32_t timeout);
 
 int Network_Configuration(void)
 {
@@ -239,6 +242,107 @@ int Network_GetWlanConnection(NetworkWlanConnection_t *connection, uint32_t time
 	{
 		result = -ERR_NOCONNECT;
 	}
+
+	return result;
+}
+
+int Network_GetIPAddress(char *address, uint32_t timeout)
+{
+	int result;
+
+	if (!address)
+	{
+		return -ERR_PARAM;
+	}
+
+	result = SendCommand("IPA?", timeout);
+
+	*address = '\0';
+
+	while (result == 0 && *address == '\0')
+	{
+		/* Wait for the subject line */
+		result = GetLine(rxLineAlt, timeout);
+
+		if (result > 0 && rxLineAlt[0] != '\0' && rxLineAlt[0] != 'I')
+		{
+			strcpy(address, rxLineAlt);
+			result = 0;
+		}
+	}
+
+	if (result == 0 && *address == '\0')
+		result = -ERR_GENERIC;
+
+	return result;
+}
+
+int Network_GetEmail(char *subject, char* body, uint32_t timeout)
+{
+	int result;
+
+	if (!subject && !body)
+	{
+		return -ERR_PARAM;
+	}
+
+	if (subject)
+	{
+		result = SendCommand("!RML", timeout);
+
+		if (result == 0)
+		{
+			/* Wait for the subject line */
+			result = WaitForEmailSubject(subject, timeout);
+		}
+	}
+
+	return result;
+}
+
+int WaitForEmailSubject(char* subject, uint32_t timeout)
+{
+	int result = 0;
+	uint8_t tabCount = 0;
+
+	*subject = '\0';
+
+	while (result == 0 && *subject == '\0')
+	{
+		result = GetLine(rxLineAlt, timeout);
+
+		if (result > 0 &&
+			rxLineAlt[0] != '\0' &&
+			rxLineAlt[0] == '1' &&
+			rxLineAlt[1] == '\t')
+		{
+			result = 0;
+			char *pch = rxLineAlt;
+
+			while (*pch != '\0')
+			{
+				if (*pch++ == '\t')
+					tabCount++;
+
+				if (tabCount == 3)
+				{
+					char *ch = subject;
+					while (*pch != '\t' && *pch != '\r' && *pch != '\0')
+						*ch++ = *pch++;
+
+					*ch = '\0';
+					break;
+				}
+			}
+		}
+		else if (result > 0)
+		{
+			result = 0;
+		}
+	}
+
+	if (result == 0 && *subject == '\0')
+		result = -ERR_GENERIC;
 
 	return result;
 }
@@ -435,7 +539,7 @@ int GetLine(char* response, uint32_t timeout)
 	portTickType elapsed;
 	portTickType start = xTaskGetTickCount();
 	portTickType block = (timeout == 0 ? portMAX_DELAY : timeout / portTICK_RATE_MS);
-	portBASE_TYPE result;
+	portBASE_TYPE result = pdTRUE;
 	char ch = '\r';
 	int i = 0;
 
@@ -443,7 +547,6 @@ int GetLine(char* response, uint32_t timeout)
 	{
 		return -ERR_PARAM;
 	}
-
 
 	while ((ch == '\r' || ch == '\n') && result)
 	{
@@ -635,8 +738,10 @@ void USART2_IRQHandler(void)
 			ch = USART_ReceiveData(USART2);
 			xQueueSendToBackFromISR(xQueue, &ch, &xHigherPriorityTaskWoken);
 
+#if 0
 			if (USART_GetFlagStatus(USART1, USART_FLAG_TXE) != RESET)
 				USART_SendData(USART1, ch);
+#endif
 
 			if (xHigherPriorityTaskWoken)
 				taskYIELD();

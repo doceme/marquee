@@ -28,6 +28,7 @@
 #include "common.h"
 #include "buzzer.h"
 
+/* Defines */
 #define BUZZER_NVIC_PRIO	IRQ_PRIO_HIGHEST
 
 #define DEFAULT_BEEP_DURATION	100 /* 500ms = 1/2 second */

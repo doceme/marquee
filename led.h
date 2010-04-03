@@ -49,5 +49,21 @@ int LED_SetLine(uint8_t line, char *message);
  */
 int LED_Refresh();
 
+/**
+ * @brief  Scrolls the existing message on a line of the LED display
+ * @param  line A zero-based index of the line to set
+ * @param  message The message to display
+ * @retval None
+ */
+int LED_ScrollOut(uint8_t line);
+
+/**
+ * @brief  Scrolls in a message on a line of the LED display
+ * @param  line A zero-based index of the line to set
+ * @param  message The message to display
+ * @retval None
+ */
+int LED_ScrollIn(uint8_t line, char *message);
+
 #endif /* LED_H */
 
