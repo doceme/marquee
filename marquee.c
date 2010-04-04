@@ -400,6 +400,7 @@ void Main_Task(void *pvParameters)
 {
 	int result = 0;
 	uint8_t skipOneSleep = 0;
+	uint8_t messageTimeout = 0;
 	portTickType xLastWakeTime;
 
 	/* Initialise the xLastExecutionTime variable on task entry */
@@ -419,6 +420,9 @@ void Main_Task(void *pvParameters)
 	assert_param(result >= 0);
 
 	result = Network_SendWait("E0", "I/OK", DEFAULT_TIMEOUT);
+
+	while (result != 0)
+		result = Network_SendWait("E0", "I/OK", DEFAULT_TIMEOUT);
 
 #if 0
 	xQueue = xQueueCreate(10, sizeof(char));
@@ -496,6 +500,7 @@ void Main_Task(void *pvParameters)
 				result = Network_GetEmail(response, NULL, 10000);
 				if (result == 0)
 				{
+					messageTimeout = 2;
 					LED_SetLine(0, response);
 					if (strlen(response) > 20)
 					{
@@ -507,7 +512,12 @@ void Main_Task(void *pvParameters)
 					}
 					LED_Refresh();
 					Buzzer_Beep(2);
-					Network_SendWait("!RMM", "I/ONLINE", DEFAULT_TIMEOUT);
+					result = Network_SendWait("!RMM", "I/OK", DEFAULT_TIMEOUT);
+				}
+				else
+				{
+					if (messageTimeout && --messageTimeout == 0)
+						LED_ScrollOut(0);
 				}
 			} break;
 

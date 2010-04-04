@@ -341,7 +341,7 @@ int WaitForEmailSubject(char* subject, uint32_t timeout)
 		}
 	}
 
-	if (result == 0 && *subject == '\0')
+	if (result == 0 && tabCount != 3)
 		result = -ERR_GENERIC;
 
 	return result;
