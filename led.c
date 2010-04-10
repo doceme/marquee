@@ -70,6 +70,7 @@
 
 /* Local Variables */
 static uint8_t lines[LED_NUM_LINES][LED_BUFFER_SIZE];
+static int blank = 1;
 #ifdef LED_INTERRUPT
 static uint16_t display[LED_BUFFER_SIZE];
 static xTaskHandle xLEDTask = NULL;
@@ -175,6 +176,8 @@ int LED_SetLine(uint8_t line, char *message)
 	/* Clear the display */
 	memset(buffer, 0, LED_BUFFER_SIZE);
 
+	blank = 1;
+
 	if (len == 0)
 		return 0;
 
@@ -207,6 +210,9 @@ int LED_SetLine(uint8_t line, char *message)
 
 		message++;
 	}
+
+	if (k > 0)
+		blank = 0;
 
 #ifdef LED_INTERRUPT
 	if (enableInterrupt)
@@ -308,7 +314,14 @@ int LED_ScrollOut(uint8_t line)
 		//vTaskDelay(1 / portTICK_RATE_MS);
 	}
 
+	blank = 1;
+
 	return 0;
+}
+
+int LED_IsBlank(void)
+{
+	return blank;
 }
 
 /**

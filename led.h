@@ -65,5 +65,12 @@ int LED_ScrollOut(uint8_t line);
  */
 int LED_ScrollIn(uint8_t line, char *message);
 
+/**
+ * @brief  Determines whether or not the display is blank
+ * @retval 0 if not blank
+ * @retval 1 if blank
+ */
+int LED_IsBlank(void);
+
 #endif /* LED_H */
 

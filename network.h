@@ -58,6 +58,16 @@ typedef struct NetworkWlanConnection_t
 	uint8_t snr;
 } NetworkWlanConnection_t;
 
+typedef struct NetworkDateTime_t
+{
+	uint16_t year;
+	uint8_t month;
+	uint8_t day;
+	uint8_t hours;
+	uint8_t minutes;
+	uint8_t seconds;
+} NetworkDateTime_t;
+
 /**
  * @brief  Configures the network
  * @param  None
@@ -145,6 +155,17 @@ int Network_GetIPAddress(char *address, uint32_t timeout);
  * @retval -ERR_GENERIC if the command failed to be sent
  */
 int Network_GetEmail(char *subject, char* body, uint32_t timeout);
+
+/**
+ * @brief  Get the current date and time
+ * @param  time Pointer to the returned date and time
+ * @retval 0 if successful
+ * @retval -ERR_PARAM if subject or body is NULL
+ * @retval -ERR_TIMEOUT if email was not received in timeout milliseconds
+ * @retval -ERR_NOCONNECT if not connected
+ * @retval -ERR_GENERIC if the command failed to be sent
+ */
+int Network_GetDateTime(NetworkDateTime_t *dateTime, uint32_t timeout);
 
 #endif /* NETWORK_H */
 

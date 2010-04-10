@@ -57,8 +57,9 @@ static xTaskHandle xMainTask = NULL;
 static NetworkState networkState = NetworkState_NotConnected;
 static NetworkWlanConnection_t networkConnection;
 static char response[80];
-const static uint32_t sleepDurations[NetworkState_Last] = { 3, 3, 10 };
+const static uint32_t sleepDurations[NetworkState_Last] = { 3, 3, 20 };
 static uint32_t sleepDuration;
+static uint32_t showTime = 0;
 
 #if 0
 static xQueueHandle xQueue = NULL;
@@ -73,7 +74,8 @@ static void NVIC_Configuration(void);
 #ifndef DEBUG
 static void SYSCLKConfig_STOP(void);
 #endif
-static void Main_Task(void *pvParameters);
+static void Main_Task(void *pvParameters) NORETURN;
+static void main_noreturn(void) NORETURN;
 
 void assert_failed(uint8_t *function, uint32_t line)
 {
@@ -97,7 +99,12 @@ int outbyte(int ch)
 /**
  * Main function
  */
-int main()
+int main(void)
+{
+	main_noreturn();
+}
+
+inline void main_noreturn(void)
 {
 	RCC_Configuration();
 	GPIO_Configuration();
@@ -112,9 +119,7 @@ int main()
 	/* Start the FreeRTOS scheduler */
 	vTaskStartScheduler();
 
-	/* If all is well we will never reach here as the scheduler will now be running. */
-	/* If we do get here, it will most likely be because we ran out of heap space. */
-	return 0;
+	while (1);
 }
 
 /**
@@ -162,6 +167,7 @@ void EXTI_Configuration(void)
 {
 	EXTI_InitTypeDef EXTI_InitStructure;
 
+#ifndef DEBUG
 	/* Configure EXTI Line17(RTC Alarm) to generate an interrupt on rising edge */
 	EXTI_ClearITPendingBit(EXTI_Line17);
 	EXTI_InitStructure.EXTI_Line = EXTI_Line17;
@@ -169,6 +175,7 @@ void EXTI_Configuration(void)
 	EXTI_InitStructure.EXTI_Trigger = EXTI_Trigger_Rising;
 	EXTI_InitStructure.EXTI_LineCmd = ENABLE;
 	EXTI_Init(&EXTI_InitStructure);
+#endif
 
 	EXTI_ClearITPendingBit(EXTI_Line11);
 	EXTI_InitStructure.EXTI_Line = EXTI_Line11;
@@ -210,14 +217,17 @@ void RTC_Configuration(void)
 	/* Wait for RTC APB registers synchronisation */
 	RTC_WaitForSynchro();
 
-	/* Set the RTC time base to 1s */
+	/* Set the RTC time base to 1min */
 	RTC_SetPrescaler(32767);
 
 	/* Wait until last write operation on RTC registers has finished */
 	RTC_WaitForLastTask();
 
 	/* Enable the RTC Alarm interrupt */
-	RTC_ITConfig(RTC_IT_ALR, ENABLE);
+	//RTC_ITConfig(RTC_IT_ALR, ENABLE);
+
+	/* Enable the RTC second interrupt */
+	RTC_ITConfig(RTC_IT_SEC, ENABLE);
 
 	/* Wait until last write operation on RTC registers has finished */
 	RTC_WaitForLastTask();
@@ -241,7 +251,8 @@ void NVIC_Configuration(void)
 	/* Configure HCLK clock as SysTick clock source. */
 	SysTick_CLKSourceConfig(SysTick_CLKSource_HCLK);
 
-	NVIC_InitStructure.NVIC_IRQChannel = RTCAlarm_IRQn;
+	//NVIC_InitStructure.NVIC_IRQChannel = RTCAlarm_IRQn;
+	NVIC_InitStructure.NVIC_IRQChannel = RTC_IRQn;
 	NVIC_InitStructure.NVIC_IRQChannelPreemptionPriority = 0;
 	NVIC_InitStructure.NVIC_IRQChannelSubPriority = 0;
 	NVIC_InitStructure.NVIC_IRQChannelCmd = ENABLE;
@@ -367,6 +378,53 @@ void EXTI15_10_IRQHandler(void)
 }
 
 /**
+  * @brief  This function handles RTC interrupt request
+  * @param  None
+  * @retval None
+  */
+void RTC_IRQHandler(void)
+{
+	if(RTC_GetITStatus(RTC_IT_SEC) != RESET)
+	{
+		/* Clear RTC Alarm interrupt pending bit */
+		RTC_ClearITPendingBit(RTC_IT_SEC);
+
+		if (showTime)
+		{
+			uint32_t counter = RTC_GetCounter();
+			uint8_t hours = counter / 3600;
+			uint8_t minutes = (counter % 3600) / 60;
+			//uint8_t seconds = (counter % 3600) % 60;
+			uint8_t pm = 0;
+
+			if (hours > 12)
+			{
+				pm = 1;
+				tsprintf(response, "       %d:%02dpm", hours - 12, minutes);
+			}
+			else
+			{
+				tsprintf(response, "       %d:%02dam", hours, minutes);
+			}
+
+			LED_SetLine(0, response);
+			LED_Refresh();
+		}
+
+		/* Wait until last write operation on RTC registers has finished */
+		RTC_WaitForLastTask();
+
+		/* Reset RTC Counter when Time is 23:59:59 */
+		if (RTC_GetCounter() == 0x00015180)
+		{
+			RTC_SetCounter(0);
+			/* Wait until last write operation on RTC registers has finished */
+			RTC_WaitForLastTask();
+		}
+	}
+}
+
+/**
   * @brief  This function handles RTC Alarm interrupt request
   * @param  None
   * @retval None
@@ -402,6 +460,7 @@ void Main_Task(void *pvParameters)
 	uint8_t skipOneSleep = 0;
 	uint8_t messageTimeout = 0;
 	portTickType xLastWakeTime;
+	NetworkDateTime_t dateTime;
 
 	/* Initialise the xLastExecutionTime variable on task entry */
 	xLastWakeTime = xTaskGetTickCount();
@@ -419,10 +478,42 @@ void Main_Task(void *pvParameters)
 	result = Network_Configuration();
 	assert_param(result >= 0);
 
+	/* Set baud rate to 115200 */
+	result = Network_SendWait("BDRF=9", "I/OK", DEFAULT_TIMEOUT);
+	assert_param(result >= 0);
+
 	result = Network_SendWait("E0", "I/OK", DEFAULT_TIMEOUT);
 
 	while (result != 0)
 		result = Network_SendWait("E0", "I/OK", DEFAULT_TIMEOUT);
+
+	result = Network_GetDateTime(&dateTime, DEFAULT_TIMEOUT);
+
+	if (result != 0 || dateTime.month > 12 || dateTime.day > 31 || dateTime.hours > 24 || dateTime.minutes > 60 || dateTime.seconds > 60)
+	{
+		tprintf("Invalid date/time!\r\n");
+	}
+	else
+	{
+		uint8_t pm = 0;
+		tprintf("Year: %d\r\n", dateTime.year);
+		tprintf("Month: %d\r\n", dateTime.month);
+		tprintf("Day: %d\r\n", dateTime.day);
+		tprintf("Hours: %d\r\n", dateTime.hours);
+		tprintf("Minutes: %d\r\n", dateTime.minutes);
+		tprintf("Seconds: %d\r\n", dateTime.seconds);
+
+		/* Wait until last write operation on RTC registers has finished */
+		RTC_WaitForLastTask();
+
+		/* Change the current time */
+		RTC_SetCounter(dateTime.hours * 3600 + dateTime.minutes * 60 + dateTime.seconds);
+
+		/* Wait until last write operation on RTC registers has finished */
+		RTC_WaitForLastTask();
+		showTime = 1;
+	}
+
 
 #if 0
 	xQueue = xQueueCreate(10, sizeof(char));
@@ -510,6 +601,7 @@ void Main_Task(void *pvParameters)
 					{
 						LED_SetLine(1, "");
 					}
+					showTime = 0;
 					LED_Refresh();
 					Buzzer_Beep(2);
 					result = Network_SendWait("!RMM", "I/OK", DEFAULT_TIMEOUT);
@@ -517,7 +609,10 @@ void Main_Task(void *pvParameters)
 				else
 				{
 					if (messageTimeout && --messageTimeout == 0)
+					{
 						LED_ScrollOut(0);
+						showTime = 1;
+					}
 				}
 			} break;
 

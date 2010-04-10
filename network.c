@@ -300,6 +300,60 @@ int Network_GetEmail(char *subject, char* body, uint32_t timeout)
 	return result;
 }
 
+int Network_GetDateTime(NetworkDateTime_t *dateTime, uint32_t timeout)
+{
+	int result;
+
+	if (!dateTime)
+	{
+		return -ERR_PARAM;
+	}
+
+	result = SendCommand("RP8", timeout);
+
+	dateTime->year = 0;
+
+	while (result == 0 && dateTime->year == 0)
+	{
+		/* Wait for the subject line */
+		result = GetLine(rxLineAlt, timeout);
+
+		if (result > 0 && rxLineAlt[0] >= '0' && rxLineAlt[0] <= '9')
+		{
+			char *ch = rxLineAlt;
+
+			rxLineAlt[4] = '\0';
+			dateTime->year = (uint16_t)atoi(ch);
+
+			ch += 5;
+			rxLineAlt[7] = '\0';
+			dateTime->month = (uint8_t)atoi(ch);
+
+			ch += 3;
+			rxLineAlt[10] = '\0';
+			dateTime->day = (uint8_t)atoi(ch);
+
+			ch += 3;
+			rxLineAlt[13] = '\0';
+			dateTime->hours = (uint8_t)atoi(ch);
+
+			ch += 3;
+			rxLineAlt[16] = '\0';
+			dateTime->minutes = (uint8_t)atoi(ch);
+
+			ch += 3;
+			dateTime->seconds = (uint8_t)atoi(ch);
+
+			result = 0;
+		}
+	}
+
+	if (result == 0 && dateTime->year == 0)
+		result = -ERR_GENERIC;
+
+	return result;
+}
+
 int WaitForEmailSubject(char* subject, uint32_t timeout)
 {
 	int result = 0;

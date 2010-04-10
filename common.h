@@ -44,5 +44,7 @@
 #define IRQ_PRIO_HIGH				5		// for SPI, ADC, I2C etc...
 #define IRQ_PRIO_HIGHEST			4 		// for USART etc...
 
+#define NORETURN __attribute__((noreturn))
+
 #endif /* COMMON_H */
 
