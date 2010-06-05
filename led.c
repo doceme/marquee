@@ -116,38 +116,21 @@ int LED_Configuration(void)
 	}
 
 #if 0
-	for (j = LED_MAX_ADDRESS; j >= 0; j--)
-	{
-		LED_WriteData(SPI_PIN_CS_0, j, 0xf);
-	}
-#endif
-
-#if 0
-	for (j = LED_MAX_ADDRESS; j >= 0; j--)
-	{
-		uint16_t cs = SPI_PIN_CS_2;
-		LED_WriteData(cs, j, 0x1);
-		vTaskDelay(100 / portTICK_RATE_MS);
-		LED_WriteData(cs, j, 0x2);
-		vTaskDelay(100 / portTICK_RATE_MS);
-		LED_WriteData(cs, j, 0x4);
-		vTaskDelay(100 / portTICK_RATE_MS);
-		LED_WriteData(cs, j, 0x8);
-		vTaskDelay(100 / portTICK_RATE_MS);
-		LED_WriteData(cs, j, 0x0);
-	}
-#endif
-
-#if 0
 	while (1)
 	{
-		LED_SetLine(0, "01234567890123456789");
-		LED_SetLine(1, "ABCDEFGHIJKLMNOPQRST");
-		LED_Refresh();
-
-		vTaskDelay(1000 / portTICK_RATE_MS);
-		LED_ScrollOut(0);
-		vTaskDelay(1000 / portTICK_RATE_MS);
+		uint16_t cs = SPI_PIN_CS_ALL;
+		for (j = LED_MAX_ADDRESS; j >= 0; j--)
+		{
+			LED_WriteData(cs, j, 0x1);
+			vTaskDelay(50 / portTICK_RATE_MS);
+			LED_WriteData(cs, j, 0x2);
+			vTaskDelay(50 / portTICK_RATE_MS);
+			LED_WriteData(cs, j, 0x4);
+			vTaskDelay(50 / portTICK_RATE_MS);
+			LED_WriteData(cs, j, 0x8);
+			vTaskDelay(50 / portTICK_RATE_MS);
+			LED_WriteData(cs, j, 0x0);
+		}
 	}
 #endif
 

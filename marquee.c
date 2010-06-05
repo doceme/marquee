@@ -59,7 +59,9 @@ static NetworkWlanConnection_t networkConnection;
 static char response[80];
 const static uint32_t sleepDurations[NetworkState_Last] = { 3, 3, 20 };
 static uint32_t sleepDuration;
-static uint32_t showTime = 0;
+static uint8_t showTime = 0;
+static uint8_t validTime = 0;
+static NetworkDateTime_t dateTime;
 
 #if 0
 static xQueueHandle xQueue = NULL;
@@ -74,6 +76,8 @@ static void NVIC_Configuration(void);
 #ifndef DEBUG
 static void SYSCLKConfig_STOP(void);
 #endif
+static inline void ShowTime(void);
+static void GetDateTime(void);
 static void Main_Task(void *pvParameters) NORETURN;
 static void main_noreturn(void) NORETURN;
 
@@ -377,6 +381,33 @@ void EXTI15_10_IRQHandler(void)
 	}
 }
 
+void ShowTime(void)
+{
+	uint8_t hours = dateTime.hours;
+
+	if (dateTime.hours == 0)
+	{
+		hours = 12;
+	}
+	else if (dateTime.hours > 12)
+	{
+		hours -= 12;
+	}
+
+	if (dateTime.hours >= 12)
+	{
+		tsprintf(response, "       %d:%02dpm", hours, dateTime.minutes);
+	}
+	else
+	{
+		tsprintf(response, "       %d:%02dam", hours, dateTime.minutes);
+	}
+
+	LED_SetLine(0, response);
+	LED_SetLine(1, "");
+	LED_Refresh();
+}
+
 /**
   * @brief  This function handles RTC interrupt request
   * @param  None
@@ -386,36 +417,29 @@ void RTC_IRQHandler(void)
 {
 	if(RTC_GetITStatus(RTC_IT_SEC) != RESET)
 	{
-		/* Clear RTC Alarm interrupt pending bit */
-		RTC_ClearITPendingBit(RTC_IT_SEC);
+		uint32_t counter = RTC_GetCounter();
 
 		if (showTime)
 		{
-			uint32_t counter = RTC_GetCounter();
-			uint8_t hours = counter / 3600;
-			uint8_t minutes = (counter % 3600) / 60;
-			//uint8_t seconds = (counter % 3600) % 60;
-			uint8_t pm = 0;
+			dateTime.seconds = (counter % 3600) % 60;
 
-			if (hours > 12)
+			if (dateTime.seconds == 0)
 			{
-				pm = 1;
-				tsprintf(response, "       %d:%02dpm", hours - 12, minutes);
-			}
-			else
-			{
-				tsprintf(response, "       %d:%02dam", hours, minutes);
-			}
+				dateTime.hours = counter / 3600;
+				dateTime.minutes = (counter % 3600) / 60;
 
-			LED_SetLine(0, response);
-			LED_Refresh();
+				ShowTime();
+			}
 		}
 
 		/* Wait until last write operation on RTC registers has finished */
 		RTC_WaitForLastTask();
 
+		/* Clear RTC Alarm interrupt pending bit */
+		RTC_ClearITPendingBit(RTC_IT_SEC);
+
 		/* Reset RTC Counter when Time is 23:59:59 */
-		if (RTC_GetCounter() == 0x00015180)
+		if (counter == 0x00015180)
 		{
 			RTC_SetCounter(0);
 			/* Wait until last write operation on RTC registers has finished */
@@ -454,13 +478,46 @@ void RTCAlarm_IRQHandler(void)
 	}
 }
 
+
+void GetDateTime(void)
+{
+	int result = Network_GetDateTime(&dateTime, DEFAULT_TIMEOUT);
+
+	if (result != 0 || dateTime.month > 12 || dateTime.day > 31 || dateTime.hours > 24 || dateTime.minutes > 60 || dateTime.seconds > 60)
+	{
+		tprintf("Invalid date/time!\r\n");
+		validTime = 0;
+	}
+	else
+	{
+		validTime = 1;
+		tprintf("Year: %d\r\n", dateTime.year);
+		tprintf("Month: %d\r\n", dateTime.month);
+		tprintf("Day: %d\r\n", dateTime.day);
+		tprintf("Hours: %d\r\n", dateTime.hours);
+		tprintf("Minutes: %d\r\n", dateTime.minutes);
+		tprintf("Seconds: %d\r\n", dateTime.seconds);
+
+		ShowTime();
+
+		/* Wait until last write operation on RTC registers has finished */
+		RTC_WaitForLastTask();
+
+		/* Change the current time */
+		RTC_SetCounter(dateTime.hours * 3600 + dateTime.minutes * 60 + dateTime.seconds);
+
+		/* Wait until last write operation on RTC registers has finished */
+		RTC_WaitForLastTask();
+		showTime = 1;
+	}
+}
+
 void Main_Task(void *pvParameters)
 {
 	int result = 0;
 	uint8_t skipOneSleep = 0;
 	uint8_t messageTimeout = 0;
 	portTickType xLastWakeTime;
-	NetworkDateTime_t dateTime;
 
 	/* Initialise the xLastExecutionTime variable on task entry */
 	xLastWakeTime = xTaskGetTickCount();
@@ -478,42 +535,19 @@ void Main_Task(void *pvParameters)
 	result = Network_Configuration();
 	assert_param(result >= 0);
 
-	/* Set baud rate to 115200 */
-	result = Network_SendWait("BDRF=9", "I/OK", DEFAULT_TIMEOUT);
-	assert_param(result >= 0);
-
-	result = Network_SendWait("E0", "I/OK", DEFAULT_TIMEOUT);
+	result = Network_SendWait("E0", "I/OK\r\n", DEFAULT_TIMEOUT);
 
 	while (result != 0)
-		result = Network_SendWait("E0", "I/OK", DEFAULT_TIMEOUT);
+		result = Network_SendWait("E0", "I/OK\r\n", DEFAULT_TIMEOUT);
 
-	result = Network_GetDateTime(&dateTime, DEFAULT_TIMEOUT);
+	result = Network_SendWait("AWS=1", "I/OK\r\n", DEFAULT_TIMEOUT);
 
-	if (result != 0 || dateTime.month > 12 || dateTime.day > 31 || dateTime.hours > 24 || dateTime.minutes > 60 || dateTime.seconds > 60)
-	{
-		tprintf("Invalid date/time!\r\n");
-	}
-	else
-	{
-		uint8_t pm = 0;
-		tprintf("Year: %d\r\n", dateTime.year);
-		tprintf("Month: %d\r\n", dateTime.month);
-		tprintf("Day: %d\r\n", dateTime.day);
-		tprintf("Hours: %d\r\n", dateTime.hours);
-		tprintf("Minutes: %d\r\n", dateTime.minutes);
-		tprintf("Seconds: %d\r\n", dateTime.seconds);
+	while (result != 0)
+		result = Network_SendWait("AWS=1", "I/OK\r\n", DEFAULT_TIMEOUT);
 
-		/* Wait until last write operation on RTC registers has finished */
-		RTC_WaitForLastTask();
-
-		/* Change the current time */
-		RTC_SetCounter(dateTime.hours * 3600 + dateTime.minutes * 60 + dateTime.seconds);
-
-		/* Wait until last write operation on RTC registers has finished */
-		RTC_WaitForLastTask();
-		showTime = 1;
-	}
-
+	/* Set baud rate to 115200 */
+	result = Network_SendWait("BDRF=9", "I/OK\r\n", DEFAULT_TIMEOUT);
+	assert_param(result >= 0);
 
 #if 0
 	xQueue = xQueueCreate(10, sizeof(char));
@@ -575,9 +609,6 @@ void Main_Task(void *pvParameters)
 				if (result == 0 && (strcmp(response, "0.0.0.0") != 0))
 				{
 					tprintf("IP: %s\r\n", response);
-					//LED_SetLine(0, "Connected");
-					//LED_SetLine(1, response);
-					//LED_Refresh();
 					networkState = NetworkState_Online;
 					skipOneSleep = 1;
 				}
@@ -588,10 +619,15 @@ void Main_Task(void *pvParameters)
 			case NetworkState_Online:
 			{
 				tprintf("#networkState: Online\r\n");
+				if (!validTime)
+				{
+					GetDateTime();
+				}
+
 				result = Network_GetEmail(response, NULL, 10000);
 				if (result == 0)
 				{
-					messageTimeout = 2;
+					messageTimeout = 1;
 					LED_SetLine(0, response);
 					if (strlen(response) > 20)
 					{
@@ -612,6 +648,7 @@ void Main_Task(void *pvParameters)
 					{
 						LED_ScrollOut(0);
 						showTime = 1;
+						ShowTime();
 					}
 				}
 			} break;
