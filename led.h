@@ -27,6 +27,27 @@
 #ifndef LED_H
 #define LED_H
 
+typedef enum LedBrightness
+{
+	LedBrightness_0,
+	LedBrightness_1,
+	LedBrightness_2,
+	LedBrightness_3,
+	LedBrightness_4,
+	LedBrightness_5,
+	LedBrightness_6,
+	LedBrightness_7,
+	LedBrightness_8,
+	LedBrightness_9,
+	LedBrightness_10,
+	LedBrightness_11,
+	LedBrightness_12,
+	LedBrightness_13,
+	LedBrightness_14,
+	LedBrightness_15,
+	LedBrightness_Last
+} LedBrightness;
+
 /**
  * @brief  Configures the LED
  * @param  None
@@ -66,11 +87,18 @@ int LED_ScrollOut(uint8_t line);
 int LED_ScrollIn(uint8_t line, char *message);
 
 /**
- * @brief  Determines whether or not the display is blank
+ * @brief  Sets the brightness of the LED
  * @retval 0 if not blank
  * @retval 1 if blank
  */
-int LED_IsBlank(void);
+int LED_SetBrightness(LedBrightness brightness);
+
+/**
+ * @brief  Redraws the LED display
+ * @param  None
+ * @retval None
+ */
+int LED_Refresh();
 
 #endif /* LED_H */
 

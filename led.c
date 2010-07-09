@@ -103,8 +103,10 @@ int LED_Configuration(void)
 
 	LED_WriteCommand(SPI_PIN_CS_ALL, 0x00);
 	LED_WriteCommand(SPI_PIN_CS_ALL, 0x24);
+#if 0
 	LED_WriteCommand(SPI_PIN_CS_MASTER, 0x18);
 	LED_WriteCommand(SPI_PIN_CS_SLAVES, 0x10);
+#endif
 	LED_WriteCommand(SPI_PIN_CS_ALL, 0x01);
 	LED_WriteCommand(SPI_PIN_CS_ALL, 0x03);
 	LED_WriteCommand(SPI_PIN_CS_ALL, 0x08);
@@ -305,6 +307,15 @@ int LED_ScrollOut(uint8_t line)
 int LED_IsBlank(void)
 {
 	return blank;
+}
+
+
+int LED_SetBrightness(LedBrightness brightness)
+{
+	if (brightness >= LedBrightness_0 && brightness < LedBrightness_Last)
+	{
+		LED_WriteCommand(SPI_PIN_CS_ALL, 0xa0 | brightness);
+	}
 }
 
 /**

@@ -42,6 +42,7 @@ typedef enum NetworkState
 
 /* Definitions */
 #define DEBUG
+#define DEBUG_AMBIENT
 #define BUSY_BIT_MARQUEE	0
 #define SLEEP_TIME		10
 #define DEFAULT_TIMEOUT		3000
@@ -50,6 +51,7 @@ typedef enum NetworkState
 /* Global Variables */
 volatile uint32_t busy = 0;
 xSemaphoreHandle xBusyMutex = NULL;
+__IO uint16_t ADCConvertedValue;
 
 /* Local Variables */
 static volatile uint8_t program = 0;
@@ -57,11 +59,30 @@ static xTaskHandle xMainTask = NULL;
 static NetworkState networkState = NetworkState_NotConnected;
 static NetworkWlanConnection_t networkConnection;
 static char response[80];
-const static uint32_t sleepDurations[NetworkState_Last] = { 3, 3, 20 };
+static const uint32_t sleepDurations[NetworkState_Last] = { 3, 3, 20 };
 static uint32_t sleepDuration;
 static uint8_t showTime = 0;
 static uint8_t validTime = 0;
 static NetworkDateTime_t dateTime;
+static const uint32_t ADC1_DR_Address = 0x4001244C;
+
+static const uint16_t brightnessToADC[LedBrightness_Last - 1] = {
+	20,	// LedBrightness_0
+	40,	// LedBrightness_1
+	60,	// LedBrightness_2
+	80,	// LedBrightness_3
+	100,	// LedBrightness_4
+	120,	// LedBrightness_5
+	140,	// LedBrightness_6
+	160,	// LedBrightness_7
+	165,	// LedBrightness_8
+	170,	// LedBrightness_9
+	175,	// LedBrightness_10
+	180,	// LedBrightness_11
+	185,	// LedBrightness_12
+	190,	// LedBrightness_13
+	195,	// LedBrightness_14
+};
 
 #if 0
 static xQueueHandle xQueue = NULL;
@@ -72,12 +93,17 @@ static void RCC_Configuration(void);
 static void GPIO_Configuration(void);
 static void EXTI_Configuration(void);
 static void RTC_Configuration(void);
+static void DMA_Configuration(void);
+static void ADC_Configuration(void);
 static void NVIC_Configuration(void);
 #ifndef DEBUG
 static void SYSCLKConfig_STOP(void);
 #endif
 static inline void ShowTime(void);
 static void GetDateTime(void);
+#ifdef DEBUG_AMBIENT
+static LedBrightness GetLedBrightnessFromADC(uint16_t value);
+#endif
 static void Main_Task(void *pvParameters) NORETURN;
 static void main_noreturn(void) NORETURN;
 
@@ -114,6 +140,8 @@ inline void main_noreturn(void)
 	GPIO_Configuration();
 	EXTI_Configuration();
 	RTC_Configuration();
+	DMA_Configuration();
+	ADC_Configuration();
 	NVIC_Configuration();
 
 	/* Create a FreeRTOS task */
@@ -140,8 +168,14 @@ void RCC_Configuration(void)
 	/* PCLK2 = HCLK/2 */
 	RCC_PCLK2Config(RCC_HCLK_Div2);
 
+	/* Enable DMA1 clock */
+	RCC_AHBPeriphClockCmd(RCC_AHBPeriph_DMA1, ENABLE);
+
 	/* Enable PWR clock */
 	RCC_APB1PeriphClockCmd(RCC_APB1Periph_PWR | RCC_APB1Periph_BKP, ENABLE);
+
+	/* Enable ADC1 and GPIOC clock */
+	RCC_APB2PeriphClockCmd(RCC_APB2Periph_ADC1 | RCC_APB2Periph_GPIOC, ENABLE);
 }
 
 /**
@@ -152,6 +186,11 @@ void RCC_Configuration(void)
 void GPIO_Configuration(void)
 {
 	GPIO_InitTypeDef GPIO_InitStructure;
+
+	/* Configure PC5 (ADC Channel15) as analog input */
+	GPIO_InitStructure.GPIO_Pin = GPIO_Pin_5;
+	GPIO_InitStructure.GPIO_Mode = GPIO_Mode_AIN;
+	GPIO_Init(GPIOC, &GPIO_InitStructure);
 
 	/* Configure button input floating */
 	GPIO_InitStructure.GPIO_Pin = GPIO_Pin_11;
@@ -235,6 +274,76 @@ void RTC_Configuration(void)
 
 	/* Wait until last write operation on RTC registers has finished */
 	RTC_WaitForLastTask();
+}
+
+/**
+  * @brief  Configure the DMA controller.
+  * @param  None
+  * @retval None
+  */
+void DMA_Configuration(void)
+{
+	DMA_InitTypeDef DMA_InitStructure;
+
+	/* DMA1 channel1 configuration */
+	DMA_DeInit(DMA1_Channel1);
+	DMA_InitStructure.DMA_PeripheralBaseAddr = ADC1_DR_Address;
+	DMA_InitStructure.DMA_MemoryBaseAddr = (uint32_t)&ADCConvertedValue;
+	DMA_InitStructure.DMA_DIR = DMA_DIR_PeripheralSRC;
+	DMA_InitStructure.DMA_BufferSize = 1;
+	DMA_InitStructure.DMA_PeripheralInc = DMA_PeripheralInc_Disable;
+	DMA_InitStructure.DMA_MemoryInc = DMA_MemoryInc_Disable;
+	DMA_InitStructure.DMA_PeripheralDataSize = DMA_PeripheralDataSize_HalfWord;
+	DMA_InitStructure.DMA_MemoryDataSize = DMA_MemoryDataSize_HalfWord;
+	DMA_InitStructure.DMA_Mode = DMA_Mode_Circular;
+	DMA_InitStructure.DMA_Priority = DMA_Priority_High;
+	DMA_InitStructure.DMA_M2M = DMA_M2M_Disable;
+	DMA_Init(DMA1_Channel1, &DMA_InitStructure);
+
+	/* Enable DMA1 channel1 */
+	DMA_Cmd(DMA1_Channel1, ENABLE);
+}
+
+/**
+  * @brief  Configure the analog to digital converter controller.
+  * @param  None
+  * @retval None
+  */
+void ADC_Configuration(void)
+{
+	ADC_InitTypeDef ADC_InitStructure;
+
+	/* ADC1 configuration */
+	ADC_InitStructure.ADC_Mode = ADC_Mode_Independent;
+	ADC_InitStructure.ADC_ScanConvMode = ENABLE;
+	ADC_InitStructure.ADC_ContinuousConvMode = ENABLE;
+	ADC_InitStructure.ADC_ExternalTrigConv = ADC_ExternalTrigConv_None;
+	ADC_InitStructure.ADC_DataAlign = ADC_DataAlign_Right;
+	ADC_InitStructure.ADC_NbrOfChannel = 1;
+	ADC_Init(ADC1, &ADC_InitStructure);
+
+	/* ADC1 regular channel14 configuration */ 
+	ADC_RegularChannelConfig(ADC1, ADC_Channel_15, 1, ADC_SampleTime_239Cycles5);
+
+	/* Enable ADC1 DMA */
+	ADC_DMACmd(ADC1, ENABLE);
+
+	/* Enable ADC1 */
+	ADC_Cmd(ADC1, ENABLE);
+
+	/* Enable ADC1 reset calibaration register */
+	ADC_ResetCalibration(ADC1);
+	/* Check the end of ADC1 reset calibration register */
+	while (ADC_GetResetCalibrationStatus(ADC1));
+
+	/* Start ADC1 calibaration */
+	ADC_StartCalibration(ADC1);
+
+	/* Check the end of ADC1 calibration */
+	while (ADC_GetCalibrationStatus(ADC1));
+
+	/* Start ADC1 Software Conversion */ 
+	ADC_SoftwareStartConvCmd(ADC1, ENABLE);
 }
 
 /**
@@ -404,7 +513,18 @@ void ShowTime(void)
 	}
 
 	LED_SetLine(0, response);
+
+#ifdef DEBUG_AMBIENT
+	LedBrightness brightness;
+	uint16_t value = ADCConvertedValue;
+	brightness = GetLedBrightnessFromADC(value);
+	LED_SetBrightness(brightness);
+	tprintf("Brightness,ADC: %d,%d\r\n", brightness, value);
+	tsprintf(response, "%d %d", brightness, value);
+	LED_SetLine(1, response);
+#else
 	LED_SetLine(1, "");
+#endif
 	LED_Refresh();
 }
 
@@ -512,6 +632,25 @@ void GetDateTime(void)
 	}
 }
 
+#ifdef DEBUG_AMBIENT
+LedBrightness GetLedBrightnessFromADC(uint16_t value)
+{
+	LedBrightness result = LedBrightness_0;
+	LedBrightness i;
+
+	for (i = LedBrightness_14; i > LedBrightness_0; i--)
+	{
+		if (value >= brightnessToADC[i])
+		{
+			result = i;
+			break;
+		}
+	}
+
+	return result;
+}
+#endif
+
 void Main_Task(void *pvParameters)
 {
 	int result = 0;
@@ -609,6 +748,8 @@ void Main_Task(void *pvParameters)
 				if (result == 0 && (strcmp(response, "0.0.0.0") != 0))
 				{
 					tprintf("IP: %s\r\n", response);
+					LED_SetLine(0, response);
+					LED_Refresh();
 					networkState = NetworkState_Online;
 					skipOneSleep = 1;
 				}
@@ -648,8 +789,9 @@ void Main_Task(void *pvParameters)
 					{
 						LED_ScrollOut(0);
 						showTime = 1;
-						ShowTime();
 					}
+
+					ShowTime();
 				}
 			} break;
 
