@@ -33,7 +33,7 @@
 
 #define DEFAULT_BEEP_DURATION	100 /* 500ms = 1/2 second */
 
-#define BUZZER_APB1_PERIPH 	RCC_APB1Periph_TIM4
+#define BUZZER_APB1_PERIPH 	RCC_APB1Periph_TIM5
 #define BUZZER_APB2_PERIPH 	RCC_APB2Periph_TIM8 | RCC_APB2Periph_GPIOC | RCC_APB2Periph_AFIO
 
 #define BUZZER_GPIO		GPIOC
@@ -41,13 +41,13 @@
 #define BUZZER_GPIO_SPEED	GPIO_Speed_50MHz
 #define BUZZER_GPIO_MODE	GPIO_Mode_AF_PP
 #define BUZZER_PWM_IRQn		TIM8_UP_IRQn
-#define BUZZER_TOGGLE_IRQn	TIM4_IRQn
+#define BUZZER_TOGGLE_IRQn	TIM5_IRQn
 #define BUZZER_IT		TIM_IT_Update
 #define BUZZER_OC_INIT		TIM_OC1Init
 #define BUZZER_PRELOAD_CONFIG	TIM_OC1PreloadConfig
 
 #define BUZZER_PWM_TIMER		TIM8
-#define BUZZER_TOGGLE_TIMER		TIM4
+#define BUZZER_TOGGLE_TIMER		TIM5
 
 #define BUSY_BIT_BUZZER		1
 
@@ -144,10 +144,6 @@ void GPIO_Configuration(void)
 	GPIO_InitStructure.GPIO_Speed = BUZZER_GPIO_SPEED;
 	GPIO_InitStructure.GPIO_Mode = BUZZER_GPIO_MODE;
 	GPIO_Init(BUZZER_GPIO, &GPIO_InitStructure);
-
-#ifdef BUZZER_GPIO_REMAP
-	GPIO_PinRemapConfig(BUZZER_GPIO_REMAP, ENABLE);
-#endif
 }
 
 /**
@@ -223,7 +219,7 @@ void Timer_Configuration(uint16_t frequency)
 	TIM_Cmd(BUZZER_TOGGLE_TIMER, DISABLE);
 }
 
-void TIM4_IRQHandler(void)
+void TIM5_IRQHandler(void)
 {
 	if (TIM_GetITStatus(BUZZER_TOGGLE_TIMER, BUZZER_IT) != RESET)
 	{
