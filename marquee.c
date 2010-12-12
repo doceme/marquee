@@ -42,7 +42,7 @@ typedef enum NetworkState
 
 /* Definitions */
 #define DEBUG
-#define DEBUG_AMBIENT
+//#define DEBUG_AMBIENT
 #define BUSY_BIT_MARQUEE	0
 #define SLEEP_TIME		10
 #define DEFAULT_TIMEOUT		3000
@@ -101,9 +101,7 @@ static void SYSCLKConfig_STOP(void);
 #endif
 static inline void ShowTime(void);
 static void GetDateTime(void);
-#ifdef DEBUG_AMBIENT
 static LedBrightness GetLedBrightnessFromADC(uint16_t value);
-#endif
 static void Main_Task(void *pvParameters) NORETURN;
 static void main_noreturn(void) NORETURN;
 
@@ -493,6 +491,8 @@ void EXTI15_10_IRQHandler(void)
 void ShowTime(void)
 {
 	uint8_t hours = dateTime.hours;
+	LedBrightness brightness;
+	uint16_t adcValue = ADCConvertedValue;
 
 	if (dateTime.hours == 0)
 	{
@@ -512,18 +512,18 @@ void ShowTime(void)
 		tsprintf(response, "       %d:%02dam", hours, dateTime.minutes);
 	}
 
-	LED_SetLine(0, response);
-
 #ifdef DEBUG_AMBIENT
-	LedBrightness brightness;
-	uint16_t value = ADCConvertedValue;
-	brightness = GetLedBrightnessFromADC(value);
-	LED_SetBrightness(brightness);
-	tprintf("Brightness,ADC: %d,%d\r\n", brightness, value);
-	tsprintf(response, "%d %d", brightness, value);
-	LED_SetLine(1, response);
+	LED_SetLine(0, response);
 #else
-	LED_SetLine(1, "");
+	LED_SetMiddleLine(response);
+#endif
+
+	brightness = GetLedBrightnessFromADC(adcValue);
+	LED_SetBrightness(brightness);
+#ifdef DEBUG_AMBIENT
+	tprintf("Brightness,ADC: %d,%d\r\n", brightness, adcValue);
+	tsprintf(response, "%d %d", brightness, adcValue);
+	LED_SetLine(1, response);
 #endif
 	LED_Refresh();
 }
@@ -632,7 +632,6 @@ void GetDateTime(void)
 	}
 }
 
-#ifdef DEBUG_AMBIENT
 LedBrightness GetLedBrightnessFromADC(uint16_t value)
 {
 	LedBrightness result = LedBrightness_0;
@@ -649,7 +648,6 @@ LedBrightness GetLedBrightnessFromADC(uint16_t value)
 
 	return result;
 }
-#endif
 
 void Main_Task(void *pvParameters)
 {
@@ -748,7 +746,7 @@ void Main_Task(void *pvParameters)
 				if (result == 0 && (strcmp(response, "0.0.0.0") != 0))
 				{
 					tprintf("IP: %s\r\n", response);
-					LED_SetLine(0, response);
+					LED_SetMiddleLine(response);
 					LED_Refresh();
 					networkState = NetworkState_Online;
 					skipOneSleep = 1;

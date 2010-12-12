@@ -153,7 +153,7 @@ int LED_SetLine(uint8_t line, char *message)
 	uint8_t *buffer = lines[line];
 	uint32_t len;
 
-	if (message && line >= LED_NUM_LINES)
+	if (!message || line >= LED_NUM_LINES)
 		return -ERR_PARAM;
 
 	len = strlen(message);
@@ -188,6 +188,75 @@ int LED_SetLine(uint8_t line, char *message)
 		for (j = 0; j < CHAR_WIDTH_5X7; j++)
 		{
 			buffer[i++] = font5x7[index + j];
+		}
+
+		i++;
+		k++;
+
+		message++;
+	}
+
+	if (k > 0)
+		blank = 0;
+
+#ifdef LED_INTERRUPT
+	if (enableInterrupt)
+	{
+	}
+
+	portENTER_CRITICAL();
+#endif
+
+	return 0;
+}
+
+int LED_SetMiddleLine(char *message)
+{
+	uint8_t i = 0;
+	uint8_t j;
+	uint8_t k = 0;
+	uint8_t *bufferTop = lines[0];
+	uint8_t *bufferBottom = lines[1];
+	uint32_t len;
+
+	if (!message)
+		return -ERR_PARAM;
+
+	len = strlen(message);
+
+	/* Clear the display */
+	memset(bufferTop, 0, LED_BUFFER_SIZE);
+	memset(bufferBottom, 0, LED_BUFFER_SIZE);
+
+	blank = 1;
+
+	if (len == 0)
+		return 0;
+
+#ifdef LED_INTERRUPT
+	portENTER_CRITICAL();
+
+	if (len > LED_MAX_CHARS_PER_LINE)
+		enableInterrupt = 1;
+#endif
+
+	while ((*message != 0) && (k < LED_MAX_CHARS_PER_LINE))
+	{
+		unsigned int index = (unsigned char)*message;
+		if (index < 0 || index > 127)
+		{
+			index = 0;
+		}
+		else
+		{
+			index *= CHAR_WIDTH_5X7;
+		}
+
+		for (j = 0; j < CHAR_WIDTH_5X7; j++)
+		{
+			uint8_t ch = font5x7[index + j];
+			bufferTop[i] = (ch << 5) | (ch >> 7) << 4;
+			bufferBottom[i++] = (ch >> 3) & 0x0E;
 		}
 
 		i++;
@@ -316,6 +385,8 @@ int LED_SetBrightness(LedBrightness brightness)
 	{
 		LED_WriteCommand(SPI_PIN_CS_ALL, 0xa0 | brightness);
 	}
+
+	return 0;
 }
 
 /**

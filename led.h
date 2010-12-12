@@ -64,6 +64,13 @@ int LED_Configuration(void);
 int LED_SetLine(uint8_t line, char *message);
 
 /**
+ * @brief  Sets a message in the middle of the LED display
+ * @param  message The message to display
+ * @retval None
+ */
+int LED_SetMiddleLine(char *message);
+
+/**
  * @brief  Redraws the LED display
  * @param  None
  * @retval None
