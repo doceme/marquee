@@ -75,6 +75,7 @@ SRC =  $(TARGET).c
 SRC += buzzer.c
 SRC += network.c
 SRC += led.c
+SRC += remote.c
 SRC += tprintf.c
 SRC += stm32f10x_it.c
 

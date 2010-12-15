@@ -30,6 +30,7 @@
 #include "buzzer.h"
 #include "led.h"
 #include "network.h"
+#include "remote.h"
 #include "string.h"
 
 typedef enum NetworkState
@@ -672,6 +673,12 @@ void Main_Task(void *pvParameters)
 	result = Network_Configuration();
 	assert_param(result >= 0);
 
+	tprintf("Remote Test\r\n");
+
+	result = Remote_Configuration();
+	assert_param(result >= 0);
+
+#if 0
 	result = Network_SendWait("E0", "I/OK\r\n", DEFAULT_TIMEOUT);
 
 	while (result != 0)
@@ -685,6 +692,7 @@ void Main_Task(void *pvParameters)
 	/* Set baud rate to 115200 */
 	result = Network_SendWait("BDRF=9", "I/OK\r\n", DEFAULT_TIMEOUT);
 	assert_param(result >= 0);
+#endif
 
 #if 0
 	xQueue = xQueueCreate(10, sizeof(char));
@@ -707,6 +715,8 @@ void Main_Task(void *pvParameters)
 		}
 #endif
 //		BUSY(MARQUEE);
+		vTaskSuspend(NULL);
+		continue;
 
 		switch (networkState)
 		{
