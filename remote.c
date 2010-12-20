@@ -29,7 +29,11 @@
 #include "remote.h"
 #include "tprintf.h"
 
-//#define DEBUG
+//#define DEBUG 1
+
+#ifndef DEBUG
+#define DEBUG 0
+#endif
 
 /* Defines */
 #define REMOTE_NVIC_PRIO	IRQ_PRIO_HIGHEST
@@ -57,17 +61,10 @@
 #define REMOTE_PULSE_RISING(t)	(t >> 15)
 #define REMOTE_PULSE_TIME(t)	(t & REMOTE_PULSE_TIME_MASK)
 
-
 enum remote_state_t
 {
 	REMOTE_STATE_IDLE,
 	REMOTE_STATE_MEASURE
-};
-
-enum remote_protocol_t
-{
-	REMOTE_PROTOCOL_RC5,
-	REMOTE_PROTOCOL_RC6
 };
 
 enum remote_field_t
@@ -157,11 +154,9 @@ struct remote_pulse_t
 	uint8_t rising;
 	uint8_t index;
 	uint8_t half;
-	uint8_t mode;
-	uint8_t trailer;
-	uint8_t address;
-	uint8_t data;
 };
+
+void (*remote_callback)(struct remote_button_t *button) = NULL;
 
 /* Local Variables */
 static enum remote_state_t remote_state;
@@ -177,11 +172,11 @@ static void NVIC_Configuration(void);
 static void Timer_Configuration(uint32_t frequency);
 static void remote_task(void *pvParameters);
 static uint16_t remote_get_pulse(uint16_t time);
-#ifdef DEBUG
+#if DEBUG >= 2
 static void remote_print_field(enum remote_field_t field);
 static void remote_print_pulse(struct remote_pulse_t *pulse);
 #endif
-static void remote_decode_pulse(struct remote_pulse_t *pulse);
+static int remote_decode_pulse(struct remote_pulse_t *pulse, struct remote_button_t *button);
 
 int Remote_Configuration(void)
 {
@@ -196,6 +191,16 @@ int Remote_Configuration(void)
 
 	timer_queue = xQueueCreate(256, sizeof(uint16_t));
 	assert_param(timer_queue);
+
+	return 0;
+}
+
+int Remote_SetCallback(void (*callback)(struct remote_button_t *button))
+{
+	if (callback)
+	{
+		remote_callback = callback;
+	}
 
 	return 0;
 }
@@ -397,7 +402,7 @@ void TIM4_IRQHandler(void)
 	portEND_SWITCHING_ISR(xHigherPriorityTaskWoken);
 }
 
-#ifdef DEBUG
+#if DEBUG >= 2
 static void remote_print_field(enum remote_field_t field)
 {
 	switch (field)
@@ -509,8 +514,9 @@ static uint16_t remote_get_pulse(uint16_t time)
 	return result;
 }
 
-static void remote_decode_pulse(struct remote_pulse_t *pulse)
+static int remote_decode_pulse(struct remote_pulse_t *pulse, struct remote_button_t *button)
 {
+	int result = 1;
 	enum remote_field_t next_field = REMOTE_FIELD_NONE;
 
 	switch (pulse->curr_field)
@@ -520,21 +526,23 @@ static void remote_decode_pulse(struct remote_pulse_t *pulse)
 			if (pulse->rising)
 			{
 				pulse->index = 0;
-				pulse->trailer = 0;
-				pulse->address = 0;
-				pulse->data = 0;
+				button->trailer = 0;
+				button->address = 0;
+				button->data = 0;
 
 				if (pulse->curr_time == REMOTE_PULSE_2T)
 				{
+					button->protocol = REMOTE_PROTOCOL_RC5;
 					pulse->protocol = REMOTE_PROTOCOL_RC5;
 					pulse->half = 0;
 					next_field = REMOTE_FIELD_START;
 				}
 				else if (pulse->curr_time == REMOTE_PULSE_LEADER)
 				{
+					button->protocol = REMOTE_PROTOCOL_RC6;
 					pulse->protocol = REMOTE_PROTOCOL_RC6;
 					pulse->half = 1;
-					pulse->mode = 0;
+					button->mode = 0;
 					next_field = REMOTE_FIELD_LEADER;
 				}
 			}
@@ -594,7 +602,7 @@ static void remote_decode_pulse(struct remote_pulse_t *pulse)
 			{
 				if (pulse->rising)
 				{
-					pulse->mode |= 1 << (2 - pulse->index);
+					button->mode |= 1 << (2 - pulse->index);
 				}
 
 				if (pulse->index < 2)
@@ -639,7 +647,7 @@ static void remote_decode_pulse(struct remote_pulse_t *pulse)
 				if ((pulse->protocol == REMOTE_PROTOCOL_RC5 && !pulse->rising) ||
 					((pulse->protocol == REMOTE_PROTOCOL_RC6) && pulse->rising))
 				{
-					pulse->trailer = 1;
+					button->trailer = 1;
 				}
 
 				next_field = REMOTE_FIELD_ADDRESS;
@@ -684,7 +692,7 @@ static void remote_decode_pulse(struct remote_pulse_t *pulse)
 				if ((pulse->rising && pulse->protocol == REMOTE_PROTOCOL_RC6) ||
 					(!pulse->rising && pulse->protocol == REMOTE_PROTOCOL_RC5))
 				{
-					pulse->address |= 1 << ((remote_address_bits[pulse->protocol] - 1) - pulse->index);
+					button->address |= 1 << ((remote_address_bits[pulse->protocol] - 1) - pulse->index);
 				}
 
 				if (pulse->index < (remote_address_bits[pulse->protocol] - 1))
@@ -726,7 +734,7 @@ static void remote_decode_pulse(struct remote_pulse_t *pulse)
 				if ((pulse->rising && pulse->protocol == REMOTE_PROTOCOL_RC6) ||
 					(!pulse->rising && pulse->protocol == REMOTE_PROTOCOL_RC5))
 				{
-					pulse->data |= 1 << ((remote_data_bits[pulse->protocol] - 1) - pulse->index);
+					button->data |= 1 << ((remote_data_bits[pulse->protocol] - 1) - pulse->index);
 				}
 
 				if (pulse->index < (remote_data_bits[pulse->protocol] - 1))
@@ -736,16 +744,17 @@ static void remote_decode_pulse(struct remote_pulse_t *pulse)
 				}
 				else
 				{
-#define DEBUG
+					result = 0;
+#if DEBUG >= 1
 					if (pulse->protocol == REMOTE_PROTOCOL_RC5)
 					{
 						tprintf("trailer=%d, address=%d, data=%d",
-							pulse->trailer, pulse->address, pulse->data);
+							button->trailer, button->address, button->data);
 					}
 					else if (pulse->protocol == REMOTE_PROTOCOL_RC6)
 					{
 						tprintf("mode=%d, trailer=%d, address=%d, data=%d",
-							pulse->mode, pulse->trailer, pulse->address, pulse->data);
+							button->mode, button->trailer, button->address, button->data);
 					}
 #endif
 
@@ -764,6 +773,8 @@ static void remote_decode_pulse(struct remote_pulse_t *pulse)
 
 	pulse->prev_field = pulse->curr_field;
 	pulse->curr_field = next_field;
+
+	return result;
 }
 
 void remote_task(void *pvParameters)
@@ -771,6 +782,8 @@ void remote_task(void *pvParameters)
 	portTickType xLastWakeTime;
 	portTickType wait = portMAX_DELAY;
 	struct remote_pulse_t pulse;
+	struct remote_button_t button;
+	struct remote_button_t button_copy;
 
 	/* Initialise the xLastExecutionTime variable on task entry */
 	xLastWakeTime = xTaskGetTickCount();
@@ -790,8 +803,12 @@ void remote_task(void *pvParameters)
 
 			if (pulse.curr_time != REMOTE_PULSE_UNKNOWN)
 			{
-				remote_decode_pulse(&pulse);
-#ifdef DEBUG
+				if ((remote_decode_pulse(&pulse, &button) == 0) && remote_callback)
+				{
+					button_copy = button;
+					remote_callback(&button_copy);
+				}
+#if DEBUG >= 2
 				remote_print_pulse(&pulse);
 #endif
 			}

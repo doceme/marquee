@@ -26,11 +26,34 @@
 #ifndef REMOTE_H
 #define REMOTE_H
 
+enum remote_protocol_t
+{
+	REMOTE_PROTOCOL_RC5,
+	REMOTE_PROTOCOL_RC6
+};
+
+struct remote_button_t
+{
+	enum remote_protocol_t protocol;
+	uint8_t mode;
+	uint8_t trailer;
+	uint8_t address;
+	uint8_t data;
+};
+
 /**
- * @brief  Configures the buzzer
+ * @brief  Configures the remote
  * @param  None
  * @retval None
  */
 int Remote_Configuration(void);
+
+/**
+ * @brief  Sets the remote callback
+ * @param  None
+ * @retval None
+ */
+int Remote_SetCallback(void (*callback)(struct remote_button_t *button));
+
 
 #endif /* REMOTE_H */

@@ -67,6 +67,16 @@ static uint8_t validTime = 0;
 static NetworkDateTime_t dateTime;
 static const uint32_t ADC1_DR_Address = 0x4001244C;
 
+enum remote_buttons_t
+{
+	REMOTE_BUTTON_OK
+};
+
+static struct remote_button_t buttons[] =
+{
+	{REMOTE_PROTOCOL_RC6, 0, 0, 4, 92}
+};
+
 static const uint16_t brightnessToADC[LedBrightness_Last - 1] = {
 	20,	// LedBrightness_0
 	40,	// LedBrightness_1
@@ -105,6 +115,8 @@ static void GetDateTime(void);
 static LedBrightness GetLedBrightnessFromADC(uint16_t value);
 static void Main_Task(void *pvParameters) NORETURN;
 static void main_noreturn(void) NORETURN;
+
+void OnButtonCallback(struct remote_button_t *button);
 
 void assert_failed(uint8_t *function, uint32_t line)
 {
@@ -650,6 +662,35 @@ LedBrightness GetLedBrightnessFromADC(uint16_t value)
 	return result;
 }
 
+static inline uint8_t remote_button_match(struct remote_button_t *src, struct remote_button_t *match)
+{
+	if ((src->protocol == match->protocol) &&
+		(src->mode == match->mode) &&
+		(src->address == match->address) &&
+		(src->data == match->data))
+	{
+		return 1;
+	}
+
+	return 0;
+}
+
+void OnButtonCallback(struct remote_button_t *button)
+{
+	struct remote_button_t *ok = &buttons[REMOTE_BUTTON_OK];
+
+	//tprintf("button[protocol=%d,mode=%d,trailer=%d,address=%d,data=%d]\r\n", button->protocol, button->mode, button->trailer, button->address, button->data);
+	//tprintf("ok[protocol=%d,mode=%d,trailer=%d,address=%d,data=%d]\r\n", ok->protocol, ok->mode, ok->trailer, ok->address, ok->data);
+
+	if ((showTime == 0) && remote_button_match(button, ok))
+	{
+
+		LED_ScrollOut(0);
+		showTime = 1;
+		ShowTime();
+	}
+}
+
 void Main_Task(void *pvParameters)
 {
 	int result = 0;
@@ -678,7 +719,10 @@ void Main_Task(void *pvParameters)
 	result = Remote_Configuration();
 	assert_param(result >= 0);
 
-#if 0
+	result = Remote_SetCallback(OnButtonCallback);
+	assert_param(result >= 0);
+
+#if 1
 	result = Network_SendWait("E0", "I/OK\r\n", DEFAULT_TIMEOUT);
 
 	while (result != 0)
@@ -715,8 +759,6 @@ void Main_Task(void *pvParameters)
 		}
 #endif
 //		BUSY(MARQUEE);
-		vTaskSuspend(NULL);
-		continue;
 
 		switch (networkState)
 		{
@@ -791,14 +833,8 @@ void Main_Task(void *pvParameters)
 					Buzzer_Beep(2);
 					result = Network_SendWait("!RMM", "I/OK", DEFAULT_TIMEOUT);
 				}
-				else
+				else if (showTime)
 				{
-					if (messageTimeout && --messageTimeout == 0)
-					{
-						LED_ScrollOut(0);
-						showTime = 1;
-					}
-
 					ShowTime();
 				}
 			} break;
