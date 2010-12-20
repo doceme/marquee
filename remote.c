@@ -29,6 +29,8 @@
 #include "remote.h"
 #include "tprintf.h"
 
+//#define DEBUG
+
 /* Defines */
 #define REMOTE_NVIC_PRIO	IRQ_PRIO_HIGHEST
 
@@ -55,10 +57,17 @@
 #define REMOTE_PULSE_RISING(t)	(t >> 15)
 #define REMOTE_PULSE_TIME(t)	(t & REMOTE_PULSE_TIME_MASK)
 
+
 enum remote_state_t
 {
 	REMOTE_STATE_IDLE,
 	REMOTE_STATE_MEASURE
+};
+
+enum remote_protocol_t
+{
+	REMOTE_PROTOCOL_RC5,
+	REMOTE_PROTOCOL_RC6
 };
 
 enum remote_field_t
@@ -68,16 +77,29 @@ enum remote_field_t
 	REMOTE_FIELD_START,
 	REMOTE_FIELD_MODE,
 	REMOTE_FIELD_TRAILER,
-	REMOTE_FIELD_CONTROL,
-	REMOTE_FIELD_INFO
+	REMOTE_FIELD_ADDRESS,
+	REMOTE_FIELD_DATA
 };
 
 #define REMOTE_PULSE_UNKNOWN	0
 #define REMOTE_PULSE_1T		47
 #define REMOTE_PULSE_2T		85
 #define REMOTE_PULSE_3T		132
+#define REMOTE_PULSE_4T		178
 #define REMOTE_PULSE_LEADER	271
 #define REMOTE_PULSE_MAX	500
+
+static uint8_t remote_address_bits[] =
+{
+	5,	/* REMOTE_PROTOCOL_RC5 */
+	8	/* REMOTE_PROTOCOL_RC6 */
+};
+
+static uint8_t remote_data_bits[] =
+{
+	6,	/* REMOTE_PROTOCOL_RC5 */
+	8	/* REMOTE_PROTOCOL_RC6 */
+};
 
 #if 0
 static uint16_t codes[][] =
@@ -128,15 +150,17 @@ struct remote_pulse_t
 {
 	enum remote_field_t curr_field;
 	enum remote_field_t prev_field;
+	enum remote_protocol_t protocol;
 	uint16_t curr_time;
 	uint16_t prev_time;
+	uint16_t raw_time;
 	uint8_t rising;
 	uint8_t index;
 	uint8_t half;
 	uint8_t mode;
 	uint8_t trailer;
-	uint8_t control;
-	uint8_t info;
+	uint8_t address;
+	uint8_t data;
 };
 
 /* Local Variables */
@@ -153,9 +177,9 @@ static void NVIC_Configuration(void);
 static void Timer_Configuration(uint32_t frequency);
 static void remote_task(void *pvParameters);
 static uint16_t remote_get_pulse(uint16_t time);
-#if 0
+#ifdef DEBUG
 static void remote_print_field(enum remote_field_t field);
-static void remote_print_pulse(struct remote_pulse_t *pulse, uint16_t time);
+static void remote_print_pulse(struct remote_pulse_t *pulse);
 #endif
 static void remote_decode_pulse(struct remote_pulse_t *pulse);
 
@@ -373,38 +397,7 @@ void TIM4_IRQHandler(void)
 	portEND_SWITCHING_ISR(xHigherPriorityTaskWoken);
 }
 
-#if 0
-static void remote_print_pulse(struct remote_pulse_t *pulse, uint16_t time)
-{
-	if (pulse->rising)
-		tprintf("^");
-	else
-		tprintf("v");
-
-	switch (pulse->curr_time)
-	{
-		case REMOTE_PULSE_LEADER:
-			tprintf("LR ");
-			break;
-
-		case REMOTE_PULSE_1T:
-			tprintf("1T ");
-			break;
-
-		case REMOTE_PULSE_2T:
-			tprintf("2T ");
-			break;
-
-		case REMOTE_PULSE_3T:
-			tprintf("3T ");
-			break;
-
-		default:
-			tprintf("UN ");
-			break;
-	}
-}
-
+#ifdef DEBUG
 static void remote_print_field(enum remote_field_t field)
 {
 	switch (field)
@@ -429,11 +422,11 @@ static void remote_print_field(enum remote_field_t field)
 			tprintf("t");
 			break;
 
-		case REMOTE_FIELD_CONTROL:
+		case REMOTE_FIELD_ADDRESS:
 			tprintf("c");
 			break;
 
-		case REMOTE_FIELD_INFO:
+		case REMOTE_FIELD_DATA:
 			tprintf("i");
 			break;
 
@@ -441,6 +434,50 @@ static void remote_print_field(enum remote_field_t field)
 			tprintf("i");
 			break;
 	}
+}
+
+static void remote_print_pulse(struct remote_pulse_t *pulse)
+{
+	if (pulse->rising)
+		tprintf("^");
+	else
+		tprintf("v");
+
+	remote_print_field(pulse->prev_field);
+	tprintf(",");
+	remote_print_field(pulse->curr_field);
+
+	switch (pulse->curr_time)
+	{
+		case REMOTE_PULSE_LEADER:
+			tprintf("LR");
+			break;
+
+		case REMOTE_PULSE_1T:
+			tprintf("1T");
+			break;
+
+		case REMOTE_PULSE_2T:
+			tprintf("2T");
+			break;
+
+		case REMOTE_PULSE_3T:
+			tprintf("3T");
+			break;
+
+		case REMOTE_PULSE_4T:
+			tprintf("4T");
+			break;
+
+		default:
+			tprintf("UN[%d]", pulse->raw_time);
+			break;
+	}
+
+	if (pulse->half)
+		tprintf(".h ");
+	else
+		tprintf(".f ");
 }
 #endif
 
@@ -460,6 +497,10 @@ static uint16_t remote_get_pulse(uint16_t time)
 	{
 		result = REMOTE_PULSE_3T;
 	}
+	else if (abs(time - REMOTE_PULSE_4T) <= REMOTE_PULSE_TOLERANCE)
+	{
+		result = REMOTE_PULSE_4T;
+	}
 	else if (abs(time - REMOTE_PULSE_LEADER) <= REMOTE_PULSE_TOLERANCE)
 	{
 		result = REMOTE_PULSE_LEADER;
@@ -468,27 +509,34 @@ static uint16_t remote_get_pulse(uint16_t time)
 	return result;
 }
 
-static inline void remote_update_field(struct remote_pulse_t *pulse, enum remote_field_t field)
-{
-	pulse->prev_field = pulse->curr_field;
-	pulse->curr_field = field;
-}
-
 static void remote_decode_pulse(struct remote_pulse_t *pulse)
 {
+	enum remote_field_t next_field = REMOTE_FIELD_NONE;
+
 	switch (pulse->curr_field)
 	{
 		case REMOTE_FIELD_NONE:
 		{
-			if (pulse->curr_time == REMOTE_PULSE_LEADER && pulse->rising)
+			if (pulse->rising)
 			{
 				pulse->index = 0;
-				pulse->half = 1;
-				pulse->mode = 0;
 				pulse->trailer = 0;
-				pulse->control = 0;
-				pulse->info = 0;
-				remote_update_field(pulse, REMOTE_FIELD_LEADER);
+				pulse->address = 0;
+				pulse->data = 0;
+
+				if (pulse->curr_time == REMOTE_PULSE_2T)
+				{
+					pulse->protocol = REMOTE_PROTOCOL_RC5;
+					pulse->half = 0;
+					next_field = REMOTE_FIELD_START;
+				}
+				else if (pulse->curr_time == REMOTE_PULSE_LEADER)
+				{
+					pulse->protocol = REMOTE_PROTOCOL_RC6;
+					pulse->half = 1;
+					pulse->mode = 0;
+					next_field = REMOTE_FIELD_LEADER;
+				}
 			}
 		} break;
 
@@ -496,29 +544,34 @@ static void remote_decode_pulse(struct remote_pulse_t *pulse)
 		{
 			if (pulse->curr_time == REMOTE_PULSE_2T && !pulse->rising)
 			{
-				remote_update_field(pulse, REMOTE_FIELD_START);
-			}
-			else
-			{
-				remote_update_field(pulse, REMOTE_FIELD_NONE);
+				pulse->half = 0;
+				next_field = REMOTE_FIELD_START;
 			}
 		} break;
 
 		case REMOTE_FIELD_START:
 		{
-			if (pulse->curr_time == REMOTE_PULSE_1T && pulse->rising)
+
+			if (((pulse->protocol == REMOTE_PROTOCOL_RC5) && (pulse->curr_time == REMOTE_PULSE_2T)) ||
+				((pulse->protocol == REMOTE_PROTOCOL_RC6) && (pulse->curr_time == REMOTE_PULSE_1T)))
 			{
-				pulse->half = 1;
-				remote_update_field(pulse, REMOTE_FIELD_MODE);
+				pulse->half ^= 1;
+			}
+
+			if (pulse->half)
+			{
+				if (pulse->protocol == REMOTE_PROTOCOL_RC5)
+				{
+					next_field = REMOTE_FIELD_TRAILER;
+				}
+				else if (pulse->protocol == REMOTE_PROTOCOL_RC6)
+				{
+					next_field = REMOTE_FIELD_MODE;
+				}
 			}
 			else
 			{
-				remote_update_field(pulse, REMOTE_FIELD_NONE);
-			}
-
-			if (!pulse->half)
-			{
-				remote_update_field(pulse, pulse->curr_field);
+				next_field = pulse->curr_field;
 			}
 		} break;
 
@@ -528,13 +581,12 @@ static void remote_decode_pulse(struct remote_pulse_t *pulse)
 			{
 				pulse->half ^= 1;
 			}
-			else if (pulse->curr_time == REMOTE_PULSE_2T)
+			else if ((pulse->curr_time == REMOTE_PULSE_2T) || (pulse->curr_time == REMOTE_PULSE_3T))
 			{
 				pulse->half = 1;
 			}
 			else
 			{
-				remote_update_field(pulse, REMOTE_FIELD_NONE);
 				break;
 			}
 
@@ -548,22 +600,23 @@ static void remote_decode_pulse(struct remote_pulse_t *pulse)
 				if (pulse->index < 2)
 				{
 					pulse->index++;
+					next_field = REMOTE_FIELD_MODE;
 				}
 				else
 				{
 					pulse->index = 0;
-					remote_update_field(pulse, REMOTE_FIELD_TRAILER);
+					next_field = REMOTE_FIELD_TRAILER;
 				}
 			}
 			else
 			{
-				remote_update_field(pulse, pulse->curr_field);
+				next_field = pulse->curr_field;
 			}
 		} break;
 
 		case REMOTE_FIELD_TRAILER:
 		{
-			if (pulse->curr_time == REMOTE_PULSE_1T)
+			if ((pulse->protocol == REMOTE_PROTOCOL_RC6) && (pulse->curr_time == REMOTE_PULSE_1T))
 			{
 				pulse->half = 0;
 			}
@@ -571,43 +624,46 @@ static void remote_decode_pulse(struct remote_pulse_t *pulse)
 			{
 				pulse->half ^= 1;
 			}
-			else if (pulse->curr_time == REMOTE_PULSE_3T)
+			else if ((pulse->curr_time == REMOTE_PULSE_4T && pulse->protocol == REMOTE_PROTOCOL_RC5) ||
+				(pulse->curr_time == REMOTE_PULSE_3T && pulse->protocol == REMOTE_PROTOCOL_RC6))
 			{
 				pulse->half = 1;
 			}
 			else
 			{
-				remote_update_field(pulse, REMOTE_FIELD_NONE);
 				break;
 			}
 
 			if (pulse->half)
 			{
-				if (pulse->rising)
+				if ((pulse->protocol == REMOTE_PROTOCOL_RC5 && !pulse->rising) ||
+					((pulse->protocol == REMOTE_PROTOCOL_RC6) && pulse->rising))
 				{
 					pulse->trailer = 1;
 				}
 
-				remote_update_field(pulse, REMOTE_FIELD_CONTROL);
+				next_field = REMOTE_FIELD_ADDRESS;
 			}
 			else
 			{
-				remote_update_field(pulse, pulse->curr_field);
+				next_field = pulse->curr_field;
 			}
 		} break;
 
-		case REMOTE_FIELD_CONTROL:
+		case REMOTE_FIELD_ADDRESS:
 		{
-			if (pulse->curr_time == REMOTE_PULSE_1T ||
-				(pulse->curr_time == REMOTE_PULSE_2T && pulse->prev_field == REMOTE_FIELD_TRAILER))
+			if (((pulse->protocol == REMOTE_PROTOCOL_RC5) && (pulse->curr_time == REMOTE_PULSE_2T)) ||
+				((pulse->protocol == REMOTE_PROTOCOL_RC6) && ((pulse->curr_time == REMOTE_PULSE_1T) ||
+				((pulse->curr_time == REMOTE_PULSE_2T) && (pulse->prev_field == REMOTE_FIELD_TRAILER)))))
 			{
 				pulse->half ^= 1;
 			}
-			else if (pulse->curr_time == REMOTE_PULSE_2T)
+			else if ((pulse->curr_time == REMOTE_PULSE_2T && pulse->protocol == REMOTE_PROTOCOL_RC6) ||
+					(pulse->curr_time == REMOTE_PULSE_4T && pulse->protocol == REMOTE_PROTOCOL_RC5))
 			{
 				pulse->half = 1;
 			}
-			else if (pulse->curr_time == REMOTE_PULSE_3T)
+			else if ((pulse->curr_time == REMOTE_PULSE_3T) && (pulse->protocol == REMOTE_PROTOCOL_RC6))
 			{
 				if (pulse->prev_field == REMOTE_FIELD_TRAILER)
 				{
@@ -615,84 +671,99 @@ static void remote_decode_pulse(struct remote_pulse_t *pulse)
 				}
 				else
 				{
-					remote_update_field(pulse, REMOTE_FIELD_NONE);
 					break;
 				}
 			}
 			else
 			{
-				remote_update_field(pulse, REMOTE_FIELD_NONE);
 				break;
 			}
 
 			if (pulse->half)
 			{
-				if (pulse->rising)
+				if ((pulse->rising && pulse->protocol == REMOTE_PROTOCOL_RC6) ||
+					(!pulse->rising && pulse->protocol == REMOTE_PROTOCOL_RC5))
 				{
-					pulse->control |= 1 << (7 - pulse->index);
+					pulse->address |= 1 << ((remote_address_bits[pulse->protocol] - 1) - pulse->index);
 				}
 
-				if (pulse->index < 7)
+				if (pulse->index < (remote_address_bits[pulse->protocol] - 1))
 				{
 					pulse->index++;
+					next_field = REMOTE_FIELD_ADDRESS;
 				}
 				else
 				{
 					pulse->index = 0;
-					remote_update_field(pulse, REMOTE_FIELD_INFO);
+					next_field = REMOTE_FIELD_DATA;
 				}
 			}
 			else
 			{
-				remote_update_field(pulse, pulse->curr_field);
+				next_field = pulse->curr_field;
 			}
 		} break;
 
-		case REMOTE_FIELD_INFO:
+		case REMOTE_FIELD_DATA:
 		{
-			if (pulse->curr_time == REMOTE_PULSE_1T)
+			if (((pulse->protocol == REMOTE_PROTOCOL_RC5) && (pulse->curr_time == REMOTE_PULSE_2T)) ||
+				((pulse->protocol == REMOTE_PROTOCOL_RC6) && (pulse->curr_time == REMOTE_PULSE_1T)))
 			{
 				pulse->half ^= 1;
 			}
-			else if (pulse->curr_time == REMOTE_PULSE_2T)
+			else if (((pulse->protocol == REMOTE_PROTOCOL_RC5) && (pulse->curr_time == REMOTE_PULSE_4T)) ||
+				((pulse->protocol == REMOTE_PROTOCOL_RC6) && (pulse->curr_time == REMOTE_PULSE_2T)))
 			{
 				pulse->half = 1;
 			}
 			else
 			{
-				remote_update_field(pulse, REMOTE_FIELD_NONE);
 				break;
 			}
 
 			if (pulse->half)
 			{
-				if (pulse->rising)
+				if ((pulse->rising && pulse->protocol == REMOTE_PROTOCOL_RC6) ||
+					(!pulse->rising && pulse->protocol == REMOTE_PROTOCOL_RC5))
 				{
-					pulse->info |= 1 << (7 - pulse->index);
+					pulse->data |= 1 << ((remote_data_bits[pulse->protocol] - 1) - pulse->index);
 				}
 
-				if (pulse->index < 7)
+				if (pulse->index < (remote_data_bits[pulse->protocol] - 1))
 				{
 					pulse->index++;
+					next_field = REMOTE_FIELD_DATA;
 				}
 				else
 				{
-					tprintf("mode=%d, trailer=%d, control=%d, info=%d",
-						pulse->mode, pulse->trailer, pulse->control, pulse->info);
-					remote_update_field(pulse, REMOTE_FIELD_NONE);
+#define DEBUG
+					if (pulse->protocol == REMOTE_PROTOCOL_RC5)
+					{
+						tprintf("trailer=%d, address=%d, data=%d",
+							pulse->trailer, pulse->address, pulse->data);
+					}
+					else if (pulse->protocol == REMOTE_PROTOCOL_RC6)
+					{
+						tprintf("mode=%d, trailer=%d, address=%d, data=%d",
+							pulse->mode, pulse->trailer, pulse->address, pulse->data);
+					}
+#endif
+
+					next_field = REMOTE_FIELD_NONE;
 				}
 			}
 			else
 			{
-				remote_update_field(pulse, pulse->curr_field);
+				next_field = pulse->curr_field;
 			}
 		} break;
 
 		default:
-		{
-			remote_update_field(pulse, REMOTE_FIELD_NONE);
-		} break;
+			break;
 	}
+
+	pulse->prev_field = pulse->curr_field;
+	pulse->curr_field = next_field;
 }
 
 void remote_task(void *pvParameters)
@@ -704,7 +775,7 @@ void remote_task(void *pvParameters)
 	/* Initialise the xLastExecutionTime variable on task entry */
 	xLastWakeTime = xTaskGetTickCount();
 
-	remote_update_field(&pulse, REMOTE_FIELD_NONE);
+	pulse.curr_field = REMOTE_FIELD_NONE;
 
 	for(;;)
 	{
@@ -713,10 +784,23 @@ void remote_task(void *pvParameters)
 		if (xQueueReceive(timer_queue, &time, wait))
 		{
 			pulse.rising = REMOTE_PULSE_RISING(time);
+			pulse.raw_time = REMOTE_PULSE_TIME(time);
 			pulse.prev_time = pulse.curr_time;
-			pulse.curr_time = remote_get_pulse(REMOTE_PULSE_TIME(time));
+			pulse.curr_time = remote_get_pulse(pulse.raw_time);
 
-			remote_decode_pulse(&pulse);
+			if (pulse.curr_time != REMOTE_PULSE_UNKNOWN)
+			{
+				remote_decode_pulse(&pulse);
+#ifdef DEBUG
+				remote_print_pulse(&pulse);
+#endif
+			}
+			else
+			{
+				pulse.prev_field = pulse.curr_field;
+				pulse.curr_field = REMOTE_FIELD_NONE;
+				wait = portMAX_DELAY;
+			}
 
 			if (time != REMOTE_PULSE_LAST)
 			{
@@ -730,7 +814,8 @@ void remote_task(void *pvParameters)
 		}
 		else if (wait != portMAX_DELAY)
 		{
-			remote_update_field(&pulse, REMOTE_FIELD_NONE);
+			pulse.prev_field = pulse.curr_field;
+			pulse.curr_field = REMOTE_FIELD_NONE;
 			wait = portMAX_DELAY;
 			tprintf("\r\n");
 		}
