@@ -46,7 +46,7 @@ These are used by the startup in order to allocate stacks for the different mode
 Note: FreeRTOS gives each task an own stack
 */
 
-__Stack_Size = 128 ;
+__Stack_Size = 1024 ;
 
 PROVIDE ( _Stack_Size = __Stack_Size ) ;
 

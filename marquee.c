@@ -33,6 +33,14 @@
 #include "remote.h"
 #include "string.h"
 
+/* Definitions */
+#define DEBUG
+//#define DEBUG_AMBIENT
+#define BUSY_BIT_MARQUEE	0
+#define SLEEP_TIME		10
+#define DEFAULT_TIMEOUT		3000
+#define MS_PER_SEC		1000
+
 typedef enum NetworkState
 {
 	NetworkState_NotConnected,
@@ -41,13 +49,30 @@ typedef enum NetworkState
 	NetworkState_Last
 } NetworkState;
 
-/* Definitions */
-#define DEBUG
-//#define DEBUG_AMBIENT
-#define BUSY_BIT_MARQUEE	0
-#define SLEEP_TIME		10
-#define DEFAULT_TIMEOUT		3000
-#define MS_PER_SEC		1000
+enum marquee_state_t
+{
+	MARQUEE_STATE_IDLE,
+	MARQUEE_STATE_MESSAGE,
+	MARQUEE_STATE_MENU,
+	MARQUEE_STATE_SET_TIMER,
+	MARQUEE_STATE_TIMER,
+	MARQUEE_STATE_CONTACT
+};
+
+enum marquee_menus_t
+{
+	MARQUEE_MENU_NONE,
+	MARQUEE_MENU_TIMER,
+	MARQUEE_MENU_CALL,
+	MARQUEE_MENU_LAST
+};
+
+struct marquee_menu_t
+{
+	enum marquee_menus_t item;
+	enum led_icon16_t icon;
+	char *text;
+};
 
 /* Global Variables */
 volatile uint32_t busy = 0;
@@ -62,19 +87,90 @@ static NetworkWlanConnection_t networkConnection;
 static char response[80];
 static const uint32_t sleepDurations[NetworkState_Last] = { 3, 3, 20 };
 static uint32_t sleepDuration;
-static uint8_t showTime = 0;
 static uint8_t validTime = 0;
 static NetworkDateTime_t dateTime;
 static const uint32_t ADC1_DR_Address = 0x4001244C;
+static enum marquee_state_t marquee_state;
+static enum marquee_state_t marquee_prev_state;
+static struct marquee_menu_t *marquee_menu;
+static uint8_t button_trailer = 2;
+static uint8_t cursor_pos;
+static uint8_t cursor_state;
+
+static const struct marquee_menu_t marquee_menu_items[] =
+{
+	{MARQUEE_MENU_NONE, 0, ""},
+	{MARQUEE_MENU_TIMER, LED_ICON16_TIMER, "Timer"},
+	{MARQUEE_MENU_CALL, LED_ICON16_CALL, "Call"},
+	{MARQUEE_MENU_LAST, 0, ""}
+};
 
 enum remote_buttons_t
 {
-	REMOTE_BUTTON_OK
+	REMOTE_BUTTON_NONE,
+	REMOTE_BUTTON_UP,
+	REMOTE_BUTTON_DOWN,
+	REMOTE_BUTTON_LEFT,
+	REMOTE_BUTTON_RIGHT,
+	REMOTE_BUTTON_OK,
+	REMOTE_BUTTON_MENU,
+	REMOTE_BUTTON_LAST_CH,
+	REMOTE_BUTTON_INFO,
+	REMOTE_BUTTON_0,
+	REMOTE_BUTTON_1,
+	REMOTE_BUTTON_2,
+	REMOTE_BUTTON_3,
+	REMOTE_BUTTON_4,
+	REMOTE_BUTTON_5,
+	REMOTE_BUTTON_6,
+	REMOTE_BUTTON_7,
+	REMOTE_BUTTON_8,
+	REMOTE_BUTTON_9,
+	REMOTE_BUTTON_EXIT,
+	REMOTE_BUTTON_PAUSE,
+	REMOTE_BUTTON_DEL,
+	REMOTE_BUTTON_RW,
+	REMOTE_BUTTON_FF,
+	REMOTE_BUTTON_PLAY,
+	REMOTE_BUTTON_STOP,
+	REMOTE_BUTTON_REC,
+	REMOTE_BUTTON_INPUT,
+	REMOTE_BUTTON_LAST
 };
 
 static struct remote_button_t buttons[] =
 {
-	{REMOTE_PROTOCOL_RC6, 0, 0, 4, 92}
+	{0, 0, 0, 0, 0},			/* REMOTE_BUTTON_NONE */
+	{REMOTE_PROTOCOL_RC6, 0, 0, 4, 88},	/* REMOTE_BUTTON_UP */
+	{REMOTE_PROTOCOL_RC6, 0, 0, 4, 89},	/* REMOTE_BUTTON_DOWN */
+	{REMOTE_PROTOCOL_RC6, 0, 0, 4, 90},	/* REMOTE_BUTTON_LEFT */
+	{REMOTE_PROTOCOL_RC6, 0, 0, 4, 91},	/* REMOTE_BUTTON_RIGHT */
+	{REMOTE_PROTOCOL_RC6, 0, 0, 4, 92},	/* REMOTE_BUTTON_OK */
+	{REMOTE_PROTOCOL_RC6, 0, 0, 4, 130},	/* REMOTE_BUTTON_MENU */
+	{REMOTE_PROTOCOL_RC6, 0, 0, 4, 131},	/* REMOTE_BUTTON_LAST_CH */
+	{REMOTE_PROTOCOL_RC6, 0, 0, 4, 201},	/* REMOTE_BUTTON_INFO */
+
+	{REMOTE_PROTOCOL_RC5, 0, 0, 5, 0},	/* REMOTE_BUTTON_0 */
+	{REMOTE_PROTOCOL_RC5, 0, 0, 5, 1},	/* REMOTE_BUTTON_1 */
+	{REMOTE_PROTOCOL_RC5, 0, 0, 5, 2},	/* REMOTE_BUTTON_2 */
+	{REMOTE_PROTOCOL_RC5, 0, 0, 5, 3},	/* REMOTE_BUTTON_3 */
+	{REMOTE_PROTOCOL_RC5, 0, 0, 5, 4},	/* REMOTE_BUTTON_4 */
+	{REMOTE_PROTOCOL_RC5, 0, 0, 5, 5},	/* REMOTE_BUTTON_5 */
+	{REMOTE_PROTOCOL_RC5, 0, 0, 5, 6},	/* REMOTE_BUTTON_6 */
+	{REMOTE_PROTOCOL_RC5, 0, 0, 5, 7},	/* REMOTE_BUTTON_7 */
+	{REMOTE_PROTOCOL_RC5, 0, 0, 5, 8},	/* REMOTE_BUTTON_8 */
+	{REMOTE_PROTOCOL_RC5, 0, 0, 5, 9},	/* REMOTE_BUTTON_9 */
+
+	{REMOTE_PROTOCOL_RC5, 0, 0, 5, 15},	/* REMOTE_BUTTON_EXIT */
+	{REMOTE_PROTOCOL_RC5, 0, 0, 5, 41},	/* REMOTE_BUTTON_PAUSE */
+	{REMOTE_PROTOCOL_RC5, 0, 0, 5, 49},	/* REMOTE_BUTTON_DEL */
+	{REMOTE_PROTOCOL_RC5, 0, 0, 5, 50},	/* REMOTE_BUTTON_RW */
+	{REMOTE_PROTOCOL_RC5, 0, 0, 5, 52},	/* REMOTE_BUTTON_FF */
+	{REMOTE_PROTOCOL_RC5, 0, 0, 5, 53},	/* REMOTE_BUTTON_PLAY */
+	{REMOTE_PROTOCOL_RC5, 0, 0, 5, 54},	/* REMOTE_BUTTON_STOP */
+	{REMOTE_PROTOCOL_RC5, 0, 0, 5, 55},	/* REMOTE_BUTTON_REC */
+	{REMOTE_PROTOCOL_RC5, 0, 0, 5, 62},	/* REMOTE_BUTTON_INPUT */
+	{0, 0, 0, 0, 0}			/* REMOTE_BUTTON_LAST */
 };
 
 static const uint16_t brightnessToADC[LedBrightness_Last - 1] = {
@@ -110,11 +206,17 @@ static void NVIC_Configuration(void);
 #ifndef DEBUG
 static void SYSCLKConfig_STOP(void);
 #endif
-static inline void ShowTime(void);
+static inline void ShowIdle(void);
 static void GetDateTime(void);
 static LedBrightness GetLedBrightnessFromADC(uint16_t value);
 static void Main_Task(void *pvParameters) NORETURN;
 static void main_noreturn(void) NORETURN;
+
+static inline void marquee_change_state(enum marquee_state_t state)
+{
+	marquee_prev_state = marquee_state;
+	marquee_state = state;
+}
 
 void OnButtonCallback(struct remote_button_t *button);
 
@@ -501,11 +603,14 @@ void EXTI15_10_IRQHandler(void)
 	}
 }
 
-void ShowTime(void)
+void ShowIdle(void)
 {
 	uint8_t hours = dateTime.hours;
 	LedBrightness brightness;
 	uint16_t adcValue = ADCConvertedValue;
+
+	marquee_change_state(MARQUEE_STATE_IDLE);
+	marquee_menu = (struct marquee_menu_t*)&marquee_menu_items[MARQUEE_MENU_NONE];
 
 	if (dateTime.hours == 0)
 	{
@@ -518,17 +623,20 @@ void ShowTime(void)
 
 	if (dateTime.hours >= 12)
 	{
-		tsprintf(response, "       %d:%02dpm", hours, dateTime.minutes);
+		tsprintf(response, "%d:%02dpm", hours, dateTime.minutes);
 	}
 	else
 	{
-		tsprintf(response, "       %d:%02dam", hours, dateTime.minutes);
+		tsprintf(response, "%d:%02dam", hours, dateTime.minutes);
 	}
 
 #ifdef DEBUG_AMBIENT
 	LED_SetLine(0, response);
 #else
-	LED_SetMiddleLine(response);
+	/* LED_SetMiddleLine(response); */
+	LED_Clear();
+	LED_SetString(2, 42, response, 0);
+	LED_Refresh();
 #endif
 
 	brightness = GetLedBrightnessFromADC(adcValue);
@@ -538,7 +646,7 @@ void ShowTime(void)
 	tsprintf(response, "%d %d", brightness, adcValue);
 	LED_SetLine(1, response);
 #endif
-	LED_Refresh();
+	/* LED_Refresh(); */
 }
 
 /**
@@ -552,17 +660,23 @@ void RTC_IRQHandler(void)
 	{
 		uint32_t counter = RTC_GetCounter();
 
-		if (showTime)
+		dateTime.seconds = (counter % 3600) % 60;
+
+		if (dateTime.seconds == 0)
 		{
-			dateTime.seconds = (counter % 3600) % 60;
+			dateTime.hours = counter / 3600;
+			dateTime.minutes = (counter % 3600) / 60;
 
-			if (dateTime.seconds == 0)
+			if (marquee_state == MARQUEE_STATE_IDLE)
 			{
-				dateTime.hours = counter / 3600;
-				dateTime.minutes = (counter % 3600) / 60;
-
-				ShowTime();
+				ShowIdle();
 			}
+		}
+
+		if (marquee_state == MARQUEE_STATE_SET_TIMER)
+		{
+			cursor_state ^= 1;
+			LED_DrawCursor(1, cursor_pos, cursor_state);
 		}
 
 		/* Wait until last write operation on RTC registers has finished */
@@ -631,7 +745,7 @@ void GetDateTime(void)
 		tprintf("Minutes: %d\r\n", dateTime.minutes);
 		tprintf("Seconds: %d\r\n", dateTime.seconds);
 
-		ShowTime();
+		ShowIdle();
 
 		/* Wait until last write operation on RTC registers has finished */
 		RTC_WaitForLastTask();
@@ -641,7 +755,6 @@ void GetDateTime(void)
 
 		/* Wait until last write operation on RTC registers has finished */
 		RTC_WaitForLastTask();
-		showTime = 1;
 	}
 }
 
@@ -662,7 +775,7 @@ LedBrightness GetLedBrightnessFromADC(uint16_t value)
 	return result;
 }
 
-static inline uint8_t remote_button_match(struct remote_button_t *src, struct remote_button_t *match)
+static uint8_t remote_button_match(struct remote_button_t *src, struct remote_button_t *match)
 {
 	if ((src->protocol == match->protocol) &&
 		(src->mode == match->mode) &&
@@ -675,19 +788,154 @@ static inline uint8_t remote_button_match(struct remote_button_t *src, struct re
 	return 0;
 }
 
+static enum remote_buttons_t remote_button_type(struct remote_button_t *button)
+{
+	enum remote_buttons_t result = REMOTE_BUTTON_NONE;
+	struct remote_button_t *match;
+	int i;
+
+	for (i = 0; i < REMOTE_BUTTON_LAST; i++)
+	{
+		match = &buttons[i];
+		if (remote_button_match(button, match))
+		{
+			result = i;
+			break;
+		}
+	}
+
+	return result;
+}
+
 void OnButtonCallback(struct remote_button_t *button)
 {
-	struct remote_button_t *ok = &buttons[REMOTE_BUTTON_OK];
-
-	//tprintf("button[protocol=%d,mode=%d,trailer=%d,address=%d,data=%d]\r\n", button->protocol, button->mode, button->trailer, button->address, button->data);
-	//tprintf("ok[protocol=%d,mode=%d,trailer=%d,address=%d,data=%d]\r\n", ok->protocol, ok->mode, ok->trailer, ok->address, ok->data);
-
-	if ((showTime == 0) && remote_button_match(button, ok))
+	if ((button->trailer == button_trailer) && (button_trailer != 2))
 	{
+		return;
+	}
+	else
+	{
+		button_trailer = button->trailer;
+		tprintf("button[protocol=%d,mode=%d,trailer=%d,address=%d,data=%d]\r\n", button->protocol, button->mode, button->trailer, button->address, button->data);
+	}
 
-		LED_ScrollOut(0);
-		showTime = 1;
-		ShowTime();
+	enum remote_buttons_t button_type = remote_button_type(button);
+
+	if ((button_type == REMOTE_BUTTON_EXIT) && (marquee_state != MARQUEE_STATE_IDLE))
+	{
+		ShowIdle();
+	}
+	else
+	{
+		tprintf("button_type=%d, marquee_state=%d\r\n", button_type, marquee_state);
+
+		switch (marquee_state)
+		{
+			case MARQUEE_STATE_MESSAGE:
+			{
+				if (button_type == REMOTE_BUTTON_OK)
+				{
+					if (marquee_prev_state == MARQUEE_STATE_IDLE)
+					{
+						ShowIdle();
+					}
+					else
+					{
+						marquee_change_state(marquee_prev_state);
+					}
+				}
+			} break;
+
+			case MARQUEE_STATE_IDLE:
+			{
+				switch (button_type)
+				{
+					case REMOTE_BUTTON_DOWN:
+					{
+						marquee_change_state(MARQUEE_STATE_MENU);
+						marquee_menu = (struct marquee_menu_t*)&marquee_menu_items[MARQUEE_MENU_TIMER];
+
+						LED_Clear();
+						LED_SetIcon16(0, marquee_menu->icon);
+						LED_SetString(2, 17, marquee_menu->text, 0);
+						LED_Refresh();
+					} break;
+
+					case REMOTE_BUTTON_UP:
+					{
+						marquee_change_state(MARQUEE_STATE_MENU);
+						marquee_menu = (struct marquee_menu_t*)&marquee_menu_items[MARQUEE_MENU_CALL];
+
+						LED_Clear();
+						LED_SetIcon16(0, marquee_menu->icon);
+						LED_SetString(2, 17, marquee_menu->text, 0);
+						LED_Refresh();
+					} break;
+
+					default:
+						break;
+				}
+			} break;
+
+			case MARQUEE_STATE_MENU:
+			{
+				switch (button_type)
+				{
+					case REMOTE_BUTTON_DOWN:
+					{
+						marquee_menu++;
+
+						if (marquee_menu->item == MARQUEE_MENU_LAST)
+						{
+							marquee_menu = (struct marquee_menu_t*)&marquee_menu_items[MARQUEE_MENU_NONE + 1];
+						}
+
+						LED_Clear();
+						LED_SetIcon16(0, marquee_menu->icon);
+						LED_SetString(2, 17, marquee_menu->text, 0);
+						LED_Refresh();
+					} break;
+
+					case REMOTE_BUTTON_UP:
+					{
+						marquee_menu--;
+
+						if (marquee_menu->item == MARQUEE_MENU_NONE)
+						{
+							marquee_menu = (struct marquee_menu_t*)&marquee_menu_items[MARQUEE_MENU_LAST - 1];
+						}
+
+						LED_Clear();
+						LED_SetIcon16(0, marquee_menu->icon);
+						LED_SetString(2, 17, marquee_menu->text, 0);
+						LED_Refresh();
+					} break;
+
+					case REMOTE_BUTTON_OK:
+					{
+						if (marquee_menu->item == MARQUEE_MENU_TIMER)
+						{
+							cursor_pos = 45;
+							marquee_change_state(MARQUEE_STATE_SET_TIMER);
+							LED_Clear();
+							LED_SetString(0, 37, "Set time", 0);
+							LED_SetString(1, 45, "00:00", 1);
+							LED_Refresh();
+						}
+						else
+						{
+							ShowIdle();
+						}
+					} break;
+
+					default:
+						break;
+				}
+			} break;
+
+			default:
+				break;
+		}
 	}
 }
 
@@ -721,6 +969,9 @@ void Main_Task(void *pvParameters)
 
 	result = Remote_SetCallback(OnButtonCallback);
 	assert_param(result >= 0);
+
+	marquee_change_state(MARQUEE_STATE_MENU);
+	marquee_menu = (struct marquee_menu_t*)&marquee_menu_items[MARQUEE_MENU_TIMER];
 
 #if 1
 	result = Network_SendWait("E0", "I/OK\r\n", DEFAULT_TIMEOUT);
@@ -798,7 +1049,8 @@ void Main_Task(void *pvParameters)
 				if (result == 0 && (strcmp(response, "0.0.0.0") != 0))
 				{
 					tprintf("IP: %s\r\n", response);
-					LED_SetMiddleLine(response);
+					LED_Clear();
+					LED_SetString(2, 0, response, 0);
 					LED_Refresh();
 					networkState = NetworkState_Online;
 					skipOneSleep = 1;
@@ -819,23 +1071,18 @@ void Main_Task(void *pvParameters)
 				if (result == 0)
 				{
 					messageTimeout = 1;
-					LED_SetLine(0, response);
-					if (strlen(response) > 20)
-					{
-						LED_SetLine(1, &response[20]);
-					}
-					else
-					{
-						LED_SetLine(1, "");
-					}
-					showTime = 0;
+					marquee_change_state(MARQUEE_STATE_MESSAGE);
+
+					LED_Clear();
+					LED_SetString(0, 0, response, 0);
 					LED_Refresh();
+
 					Buzzer_Beep(2);
 					result = Network_SendWait("!RMM", "I/OK", DEFAULT_TIMEOUT);
 				}
-				else if (showTime)
+				else if (marquee_state == MARQUEE_STATE_IDLE)
 				{
-					ShowTime();
+					ShowIdle();
 				}
 			} break;
 

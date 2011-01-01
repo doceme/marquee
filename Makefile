@@ -77,6 +77,7 @@ SRC += network.c
 SRC += led.c
 SRC += remote.c
 SRC += tprintf.c
+SRC += fault.c
 SRC += stm32f10x_it.c
 
 ## CMSIS for STM32

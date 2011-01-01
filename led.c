@@ -28,7 +28,9 @@
 #include "common.h"
 #include "led.h"
 #include "font.h"
+#include "icon.h"
 #include "string.h"
+#include "tprintf.h"
 
 /* Defines */
 #define LED_NVIC_PRIO		IRQ_PRIO_HIGHEST
@@ -69,7 +71,7 @@
 #define SPI_MASTER_IRQn		SPI2_IRQn
 
 /* Local Variables */
-static uint8_t lines[LED_NUM_LINES][LED_BUFFER_SIZE];
+static uint16_t slices[LED_BUFFER_SIZE];
 static int blank = 1;
 #ifdef LED_INTERRUPT
 static uint16_t display[LED_BUFFER_SIZE];
@@ -145,136 +147,220 @@ int LED_Configuration(void)
 	return 0;
 }
 
-int LED_SetLine(uint8_t line, char *message)
+#if 1
+int LED_SetString(uint8_t line, uint8_t pos, char* text, uint8_t fixed_width)
 {
-	uint8_t i = 0;
-	uint8_t j;
-	uint8_t k = 0;
-	uint8_t *buffer = lines[line];
-	uint32_t len;
+	int j;
+	uint16_t *slice = &slices[pos];
+	uint16_t slice_mask;
+	uint16_t slice_shift;
 
-	if (!message || line >= LED_NUM_LINES)
+	if ((text == NULL) || (pos >= LED_BUFFER_SIZE))
 		return -ERR_PARAM;
 
-	len = strlen(message);
+	if (line == 0)
+	{
+		slice_mask = 0xff00;
+		slice_shift = 0;
+	}
+	else if (line == 1)
+	{
+		slice_mask = 0x00ff;
+		slice_shift = 8;
+	}
+	else if (line == 2)
+	{
+		slice_mask = 0xf00f;
+		slice_shift = 4;
+	}
+	else
+	{
+		return -ERR_PARAM;
+	}
 
-	/* Clear the display */
-	memset(buffer, 0, LED_BUFFER_SIZE);
+	while (*text != '\0')
+	{
+		uint8_t first_slice = 0;
+		uint8_t last_slice = CHAR_WIDTH_5X7;
 
-	blank = 1;
+		if (!fixed_width)
+		{
+			for (first_slice = 0; first_slice < CHAR_WIDTH_5X7; first_slice++)
+			{
+				if (font5x7[(uint8_t)*text][first_slice])
+				{
+					break;
+				}
+			}
 
-	if (len == 0)
-		return 0;
+			for (last_slice = CHAR_WIDTH_5X7; last_slice > 0; last_slice--)
+			{
+				if (font5x7[(uint8_t)*text][last_slice - 1])
+				{
+					break;
+				}
+			}
 
-#ifdef LED_INTERRUPT
-	portENTER_CRITICAL();
+			if (first_slice == CHAR_WIDTH_5X7)
+			{
+				first_slice = 0;
+				last_slice = CHAR_WIDTH_5X7;
+			}
+		}
 
-	if (len > LED_MAX_CHARS_PER_LINE)
-		enableInterrupt = 1;
+		for (j = first_slice; j < last_slice; j++)
+		{
+			uint8_t text_slice = font5x7[(uint8_t)*text][j];
+			*slice = (*slice & slice_mask) | (text_slice << slice_shift);
+			slice++;
+		}
+
+		slice++;
+		text++;
+	}
+
+	return 0;
+}
 #endif
 
-	while ((*message != 0) && (k < LED_MAX_CHARS_PER_LINE))
+#if 1
+int LED_DrawString(uint8_t line, uint8_t pos, char* text)
+{
+	int i;
+	int j;
+	uint16_t cs = (SPI_PIN_CS_0 << (pos / 24));
+
+	if ((text == NULL) || (pos >= LED_BUFFER_SIZE))
+		return -ERR_PARAM;
+
+	if (line == 1)
 	{
-		unsigned int index = (unsigned char)*message;
-		if (index < 0 || index > 127)
+		line = 2;
+	}
+	else if (line == 2)
+	{
+		line = 1;
+	}
+	else if (line != 0)
+	{
+		return -ERR_PARAM;
+	}
+
+	while (*text != '\0')
+	{
+		uint8_t first_slice;
+		uint8_t last_slice;
+		pos %= 24;
+		i = (pos << 2) + line;
+
+		if (cs == (cs & 0x1f))
 		{
-			index = 0;
+			for (first_slice = 0; first_slice < CHAR_WIDTH_5X7; first_slice++)
+			{
+				if (font5x7[(uint8_t)*text][first_slice])
+				{
+					break;
+				}
+			}
+
+			for (last_slice = CHAR_WIDTH_5X7; last_slice > 0; last_slice--)
+			{
+				if (font5x7[(uint8_t)*text][last_slice - 1])
+				{
+					break;
+				}
+			}
+
+			if (first_slice == CHAR_WIDTH_5X7)
+			{
+				first_slice = 0;
+				last_slice = CHAR_WIDTH_5X7;
+			}
+
+			for (j = first_slice; j < last_slice; j++)
+			{
+				uint8_t text_slice = font5x7[(uint8_t)*text][j];
+
+				LED_WriteData(cs, i++, text_slice & 0xf);
+				LED_WriteData(cs, i++, (text_slice >> 4) & 0xf);
+
+				i += 2;
+
+				if (i > LED_MAX_ADDRESS) {
+					cs <<= 1;
+					pos = 0xff;
+					i = line;
+				}
+
+				pos++;
+			}
+
+			pos++;
+
+			if (pos >= 24) {
+				cs <<= 1;
+			}
+
+			text++;
 		}
 		else
 		{
-			index *= CHAR_WIDTH_5X7;
+			break;
 		}
-
-		for (j = 0; j < CHAR_WIDTH_5X7; j++)
-		{
-			buffer[i++] = font5x7[index + j];
-		}
-
-		i++;
-		k++;
-
-		message++;
 	}
 
-	if (k > 0)
-		blank = 0;
-
-#ifdef LED_INTERRUPT
-	if (enableInterrupt)
-	{
-	}
-
-	portENTER_CRITICAL();
+	return 0;
+}
 #endif
+
+int LED_SetIcon16(uint8_t pos, enum led_icon16_t icon)
+{
+	int j;
+	uint16_t *slice = &slices[pos];
+
+	if ((icon >= LED_ICON16_LAST) || (pos >= (LED_BUFFER_SIZE - 16)))
+		return -ERR_PARAM;
+
+	for (j = 0; j < 16; j++)
+	{
+		uint16_t icon_slice = icon16x16[icon][j];
+		*slice++ = icon_slice;
+	}
 
 	return 0;
 }
 
-int LED_SetMiddleLine(char *message)
+int LED_DrawIcon16(uint8_t pos, enum led_icon16_t icon)
 {
-	uint8_t i = 0;
-	uint8_t j;
-	uint8_t k = 0;
-	uint8_t *bufferTop = lines[0];
-	uint8_t *bufferBottom = lines[1];
-	uint32_t len;
+	int i;
+	int j;
+	uint16_t cs = (SPI_PIN_CS_0 << (pos / 24)) & 0x1f;
 
-	if (!message)
+	if ((icon >= LED_ICON16_LAST) || (pos >= (LED_BUFFER_SIZE - 16)))
 		return -ERR_PARAM;
 
-	len = strlen(message);
+	pos %= 24;
+	i = (pos << 2);
 
-	/* Clear the display */
-	memset(bufferTop, 0, LED_BUFFER_SIZE);
-	memset(bufferBottom, 0, LED_BUFFER_SIZE);
-
-	blank = 1;
-
-	if (len == 0)
-		return 0;
-
-#ifdef LED_INTERRUPT
-	portENTER_CRITICAL();
-
-	if (len > LED_MAX_CHARS_PER_LINE)
-		enableInterrupt = 1;
-#endif
-
-	while ((*message != 0) && (k < LED_MAX_CHARS_PER_LINE))
+	for (j = 0; j < 16; j++)
 	{
-		unsigned int index = (unsigned char)*message;
-		if (index < 0 || index > 127)
-		{
-			index = 0;
-		}
-		else
-		{
-			index *= CHAR_WIDTH_5X7;
-		}
+		uint16_t icon_slice = icon16x16[icon][j];
 
-		for (j = 0; j < CHAR_WIDTH_5X7; j++)
-		{
-			uint8_t ch = font5x7[index + j];
-			bufferTop[i] = (ch << 5) | (ch >> 7) << 4;
-			bufferBottom[i++] = (ch >> 3) & 0x0E;
+		/*tprintf("j=%d, icon_slice=0x%04x\r\n", j, icon_slice);*/
+
+		LED_WriteData(cs, i++, icon_slice & 0xf);
+		LED_WriteData(cs, i++, (icon_slice >> 4) & 0xf);
+		LED_WriteData(cs, i++, (icon_slice >> 8) & 0xf);
+		LED_WriteData(cs, i++, (icon_slice >> 12) & 0xf);
+
+		if (i > LED_MAX_ADDRESS) {
+			cs <<= 1;
+			pos = 0;
+			i = 0;
 		}
 
-		i++;
-		k++;
-
-		message++;
+		pos++;
 	}
-
-	if (k > 0)
-		blank = 0;
-
-#ifdef LED_INTERRUPT
-	if (enableInterrupt)
-	{
-	}
-
-	portENTER_CRITICAL();
-#endif
 
 	return 0;
 }
@@ -283,23 +369,36 @@ int LED_Refresh(void)
 {
 	int i = 0;
 	int j = 0;
-	int k = 0;
-	uint16_t cs = SPI_PIN_CS_4;
+	uint16_t cs = SPI_PIN_CS_0;
 
-	uint8_t* line0 = lines[0];
-	uint8_t* line1 = lines[1];;
+	uint16_t* line = slices;
 
 	for (j = 0; j < LED_BUFFER_SIZE; j++)
 	{
-		LED_WriteData(cs, i++, (line0[j]) & 0xf);
-		LED_WriteData(cs, i++, (line0[j] >> 4) & 0xf);
-		LED_WriteData(cs, i++, (line1[j]) & 0xf);
-		LED_WriteData(cs, i++, (line1[j] >> 4) & 0xf);
+		uint16_t slice = *line++;
+
+		LED_WriteData(cs, i++, (slice) & 0xf);
+		LED_WriteData(cs, i++, (slice >> 4) & 0xf);
+		LED_WriteData(cs, i++, (slice >> 8) & 0xf);
+		LED_WriteData(cs, i++, (slice >> 12) & 0xf);
+
 		if (i > LED_MAX_ADDRESS) {
-			cs >>= 1;
+			cs <<= 1;
 			i = 0;
-			k++;
 		}
+	}
+
+	return 0;
+}
+
+int LED_Clear(void)
+{
+	int j = 0;
+	uint16_t *slice = slices;
+
+	for (j = 0; j < LED_BUFFER_SIZE; j++)
+	{
+		*slice++ = 0;
 	}
 
 	return 0;
@@ -312,27 +411,22 @@ int LED_ScrollIn(uint8_t line, char* message)
 
 	for (i = 0; i < LED_BUFFER_SIZE; i++)
 	{
-		uint8_t* line0 = &lines[0][LED_BUFFER_SIZE - 1];
-		uint8_t* line1 = &lines[1][LED_BUFFER_SIZE - 1];
-		uint8_t* line0_next = &lines[0][LED_BUFFER_SIZE - 1];
-		uint8_t* line1_next = &lines[1][LED_BUFFER_SIZE - 1];
+		uint16_t* line = &slices[LED_BUFFER_SIZE - 1];
+		uint16_t* line_next = &slices[LED_BUFFER_SIZE - 1];
 
 		for (j = 0; j < LED_BUFFER_SIZE; j++)
 		{
 			if (j < (LED_BUFFER_SIZE - 1))
 			{
-				*line0++ = *(++line0_next);
-				*line1++ = *(++line1_next);
+				*line++ = *(++line_next);
 			}
 			else
 			{
-				*line0 = 0;
-				*line1 = 0;
+				*line = 0;
 			}
 		}
 
 		LED_Refresh();
-		//vTaskDelay(1 / portTICK_RATE_MS);
 	}
 
 	return 0;
@@ -345,27 +439,22 @@ int LED_ScrollOut(uint8_t line)
 
 	for (i = 0; i < LED_BUFFER_SIZE; i++)
 	{
-		uint8_t* line0 = lines[0];
-		uint8_t* line1 = lines[1];
-		uint8_t* line0_next = lines[0];
-		uint8_t* line1_next = lines[1];
+		uint16_t* line = slices;
+		uint16_t* line_next = slices;
 
 		for (j = 0; j < LED_BUFFER_SIZE; j++)
 		{
 			if (j < (LED_BUFFER_SIZE - 1))
 			{
-				*line0++ = *(++line0_next);
-				*line1++ = *(++line1_next);
+				*line++ = *(++line_next);
 			}
 			else
 			{
-				*line0 = 0;
-				*line1 = 0;
+				*line = 0;
 			}
 		}
 
 		LED_Refresh();
-		//vTaskDelay(1 / portTICK_RATE_MS);
 	}
 
 	blank = 1;
@@ -378,6 +467,119 @@ int LED_IsBlank(void)
 	return blank;
 }
 
+int LED_DrawCursor(uint8_t line, uint8_t pos, uint8_t state)
+{
+	int i;
+	int j;
+	uint16_t cs = (SPI_PIN_CS_0 << (pos / 24));
+	uint16_t *slice = &slices[pos];
+	uint16_t slice_shift;
+
+	if (pos >= (LED_BUFFER_SIZE - CHAR_WIDTH_5X7))
+		return -ERR_PARAM;
+
+	if (line == 0)
+	{
+		slice_shift = 0;
+	}
+	else if (line == 1)
+	{
+		slice_shift = 8;
+		line = 2;
+	}
+	else if (line == 2)
+	{
+		slice_shift = 4;
+		line = 1;
+	}
+	else
+	{
+		return -ERR_PARAM;
+	}
+
+	pos %= 24;
+	i = (pos << 2) + line;
+
+	for (j = 0; j < CHAR_WIDTH_5X7; j++)
+	{
+		uint8_t value = state ? 0xff : (*slice >> slice_shift);
+
+		LED_WriteData(cs, i++, value & 0xf);
+		LED_WriteData(cs, i++, (value >> 4) & 0xf);
+
+		i += 2;
+
+		if (i > LED_MAX_ADDRESS) {
+			cs <<= 1;
+			pos = 0xff;
+			i = line;
+		}
+
+		pos++;
+		slice++;
+	}
+
+
+	return 0;
+}
+
+int LED_Redraw(uint8_t line, uint8_t start, uint8_t end)
+{
+	int i;
+	int j;
+	uint8_t pos = start;
+	uint16_t cs = (SPI_PIN_CS_0 << (pos / 24));
+	uint16_t *slice = &slices[start];
+	uint16_t slice_mask;
+	uint16_t slice_shift;
+
+	if ((start >= end) || (start >= LED_BUFFER_SIZE))
+		return -ERR_PARAM;
+
+	if (line == 0)
+	{
+		slice_mask = 0xff00;
+		slice_shift = 0;
+	}
+	else if (line == 1)
+	{
+		slice_mask = 0x00ff;
+		slice_shift = 8;
+	}
+	else if (line == 2)
+	{
+		slice_mask = 0xf00f;
+		slice_shift = 4;
+	}
+	else
+	{
+		return -ERR_PARAM;
+	}
+
+	pos %= 24;
+	i = (pos << 2);
+
+	for (j = start; j < end; j++)
+	{
+		uint16_t value = (*slice & slice_mask) << slice_shift;
+
+		LED_WriteData(cs, i++, (value + slice_shift) & 0xf);
+		LED_WriteData(cs, i++, (value + slice_shift + 4) & 0xf);
+
+
+		if (i > LED_MAX_ADDRESS) {
+			cs <<= 1;
+			pos = 0xff;
+			i = line;
+		}
+
+		pos++;
+		slice++;
+	}
+
+
+	return 0;
+}
 
 int LED_SetBrightness(LedBrightness brightness)
 {

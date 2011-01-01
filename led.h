@@ -48,12 +48,59 @@ typedef enum LedBrightness
 	LedBrightness_Last
 } LedBrightness;
 
+enum led_icon16_t
+{
+	LED_ICON16_TIMER,
+	LED_ICON16_CALL,
+	LED_ICON16_LAST
+};
+
 /**
  * @brief  Configures the LED
  * @param  None
  * @retval None
  */
 int LED_Configuration(void);
+
+/**
+ * @brief  Draws a string on a line of the LED display
+ * @param  line Vertical index of the line to set
+ *         0 = Top line
+ *         1 = Bottom line
+ *         2 = Middle line
+ * @param  pos The horizontal position to start drawing
+ * @param  text The message to display
+ * @retval None
+ */
+int LED_SetString(uint8_t line, uint8_t pos, char* text, uint8_t fixed_width);
+
+/**
+ * @brief  Draws a string on a line of the LED display
+ * @param  line Vertical index of the line to set
+ *         0 = Top line
+ *         1 = Bottom line
+ *         2 = Middle line
+ * @param  pos The horizontal position to start drawing
+ * @param  text The message to display
+ * @retval None
+ */
+int LED_DrawString(uint8_t line, uint8_t pos, char* text);
+
+/**
+ * @brief  Draws an icon on the LED display
+ * @param  pos The horizontal position to start drawing
+ * @param  icon The icon to display
+ * @retval None
+ */
+int LED_SetIcon16(uint8_t pos, enum led_icon16_t icon);
+
+/**
+ * @brief  Draws an icon on the LED display
+ * @param  pos The horizontal position to start drawing
+ * @param  icon The icon to display
+ * @retval None
+ */
+int LED_DrawIcon16(uint8_t pos, enum led_icon16_t icon);
 
 /**
  * @brief  Sets a message on a line of the LED display
@@ -101,11 +148,28 @@ int LED_ScrollIn(uint8_t line, char *message);
 int LED_SetBrightness(LedBrightness brightness);
 
 /**
- * @brief  Redraws the LED display
+ * @brief  Draw a cursor on the display
+ * @param  line A zero-based index of the line to set
+ * @param  message The message to display
+ * @retval None
+ */
+int LED_DrawCursor(uint8_t line, uint8_t pos, uint8_t state);
+
+/**
+ * @brief  Redraw a portion of a line on the display
+ * @param  line A zero-based index of the line to set
+ * @param  start The start position of the line to redraw
+ * @param  end The end position of the line to redraw
+ * @retval None
+ */
+int LED_Redraw(uint8_t line, uint8_t start, uint8_t end);
+
+/**
+ * @brief  Clears the LED display
  * @param  None
  * @retval None
  */
-int LED_Refresh();
+int LED_Clear();
 
 #endif /* LED_H */
 
