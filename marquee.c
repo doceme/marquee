@@ -1116,7 +1116,7 @@ void Main_Task(void *pvParameters)
 					LED_SetString(0, 0, message, 0);
 					LED_Refresh();
 
-					//Buzzer_Beep(2);
+					Buzzer_Beep(2);
 					xSemaphoreGive(xMutex);
 				}
 				else if (marquee_state == MARQUEE_STATE_IDLE)
