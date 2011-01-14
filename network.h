@@ -145,16 +145,25 @@ int Network_GetWlanConnection(NetworkWlanConnection_t *connection, uint32_t time
 int Network_GetIPAddress(char *address, uint32_t timeout);
 
 /**
- * @brief  Get an email on the server
- * @param  subject Pointer to the returned email subject
- * @param  body Pointer to the returned email body
+ * @brief  Get a message from the server
+ * @param  message Pointer to the returned message
  * @retval 0 if successful
  * @retval -ERR_PARAM if subject or body is NULL
  * @retval -ERR_TIMEOUT if email was not received in timeout milliseconds
  * @retval -ERR_NOCONNECT if not connected
  * @retval -ERR_GENERIC if the command failed to be sent
  */
-int Network_GetEmail(char *subject, char* body, uint32_t timeout);
+int Network_GetMessage(char *message, uint32_t timeout);
+
+/**
+ * @brief  Delete a message on the server
+ * @retval 0 if successful
+ * @retval -ERR_PARAM if subject or body is NULL
+ * @retval -ERR_TIMEOUT if email was not received in timeout milliseconds
+ * @retval -ERR_NOCONNECT if not connected
+ * @retval -ERR_GENERIC if the command failed to be sent
+ */
+int Network_DeleteMessage(uint32_t timeout);
 
 /**
  * @brief  Get the current date and time

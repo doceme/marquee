@@ -50,7 +50,8 @@
 #define NETWORK_LINE_MAX_LENGTH 80
 
 /* Local Variables */
-static xQueueHandle xQueue = NULL;
+static xQueueHandle xQueue;
+static xSemaphoreHandle xMutex;
 
 /* One extra bytes for null terminator for debug purposes */
 static uint8_t txBuffer[NETWORK_BUFFER_SIZE + 1];
@@ -68,7 +69,7 @@ static int SendCommand(char *command, uint32_t timeout);
 static int WaitForResponse(char* response, uint32_t timeout);
 static int GetResponse(char start, char end, char* response, uint32_t timeout);
 static int GetLine(char* response, uint32_t timeout);
-static int WaitForEmailSubject(char *subject, uint32_t timeout);
+static int WaitForMessage(char *message, uint32_t timeout);
 
 int Network_Configuration(void)
 {
@@ -79,6 +80,9 @@ int Network_Configuration(void)
 
 	xQueue = xQueueCreate(NETWORK_QUEUE_SIZE, sizeof(char));
 	assert_param(xQueue);
+
+	xMutex = xSemaphoreCreateMutex();
+	assert_param(xMutex);
 
 	return 0;
 }
@@ -92,6 +96,9 @@ int Network_SendWait(char *command, char* response, uint32_t timeout)
 		return -ERR_PARAM;
 	}
 
+	if (xSemaphoreTake(xMutex, timeout) != pdTRUE)
+		return -ERR_TIMEOUT;
+
 	result = SendCommand(command, timeout);
 
 	if (result == 0 && response)
@@ -99,6 +106,8 @@ int Network_SendWait(char *command, char* response, uint32_t timeout)
 		/* Wait for response */
 		result = WaitForResponse(response, timeout);
 	}
+
+	xSemaphoreGive(xMutex);
 
 	return result;
 }
@@ -108,9 +117,10 @@ int Network_SendGetByChar(char *command, char start, char end, char* response, u
 	int result;
 
 	if (!command || !response)
-	{
 		return -ERR_PARAM;
-	}
+
+	if (xSemaphoreTake(xMutex, timeout) != pdTRUE)
+		return -ERR_TIMEOUT;
 
 	result = SendCommand(command, timeout);
 
@@ -120,6 +130,8 @@ int Network_SendGetByChar(char *command, char start, char end, char* response, u
 		result = GetResponse(start, end, response, timeout);
 	}
 
+	xSemaphoreGive(xMutex);
+
 	return result;
 }
 
@@ -128,9 +140,10 @@ int Network_SendGetLine(char *command, char* response, uint32_t timeout)
 	int result;
 
 	if (!command || !response)
-	{
 		return -ERR_PARAM;
-	}
+
+	if (xSemaphoreTake(xMutex, timeout) != pdTRUE)
+		return -ERR_TIMEOUT;
 
 	result = SendCommand(command, timeout);
 
@@ -139,6 +152,8 @@ int Network_SendGetLine(char *command, char* response, uint32_t timeout)
 		/* Get the response */
 		result = GetLine(response, timeout);
 	}
+
+	xSemaphoreGive(xMutex);
 
 	return result;
 }
@@ -251,9 +266,10 @@ int Network_GetIPAddress(char *address, uint32_t timeout)
 	int result;
 
 	if (!address)
-	{
 		return -ERR_PARAM;
-	}
+
+	if (xSemaphoreTake(xMutex, timeout) != pdTRUE)
+		return -ERR_TIMEOUT;
 
 	result = SendCommand("IPA?", timeout);
 
@@ -274,28 +290,60 @@ int Network_GetIPAddress(char *address, uint32_t timeout)
 	if (result == 0 && *address == '\0')
 		result = -ERR_GENERIC;
 
+	xSemaphoreGive(xMutex);
+
 	return result;
 }
 
-int Network_GetEmail(char *subject, char* body, uint32_t timeout)
+int Network_GetMessage(char* message, uint32_t timeout)
 {
 	int result;
 
-	if (!subject && !body)
-	{
+	if (!message)
 		return -ERR_PARAM;
-	}
 
-	if (subject)
+	if (xSemaphoreTake(xMutex, timeout) != pdTRUE)
+		return -ERR_TIMEOUT;
+
+	result = SendCommand("!RLNK:\"http://ledmarquee.appspot.com/?h=8347d096bc2c059f285807eccde44478\"", timeout);
+
+	if (result == 0)
 	{
-		result = SendCommand("!RML", timeout);
+		/* Wait for the subject line */
+		result = WaitForMessage(message, timeout);
 
 		if (result == 0)
-		{
-			/* Wait for the subject line */
-			result = WaitForEmailSubject(subject, timeout);
-		}
+			result = WaitForResponse("I/ONLINE", timeout);
 	}
+
+	xSemaphoreGive(xMutex);
+
+	return result;
+}
+
+int Network_DeleteMessage(uint32_t timeout)
+{
+	int result;
+	char response[NETWORK_LINE_MAX_LENGTH + 1];
+
+	if (xSemaphoreTake(xMutex, timeout) != pdTRUE)
+		return -ERR_TIMEOUT;
+
+	result = SendCommand("!RLNK:\"http://ledmarquee.appspot.com/d?h=8347d096bc2c059f285807eccde44478\"", timeout);
+
+	if (result == 0)
+	{
+		/* Wait for the subject line */
+		result = WaitForMessage(response, timeout);
+
+		if (result == 0 && strcmp(response, "ok") != 0)
+			result = -ERR_GENERIC;
+
+		if (result == 0)
+			result = WaitForResponse("I/ONLINE", timeout);
+	}
+
+	xSemaphoreGive(xMutex);
 
 	return result;
 }
@@ -305,9 +353,10 @@ int Network_GetDateTime(NetworkDateTime_t *dateTime, uint32_t timeout)
 	int result;
 
 	if (!dateTime)
-	{
 		return -ERR_PARAM;
-	}
+
+	if (xSemaphoreTake(xMutex, timeout) != pdTRUE)
+		return -ERR_TIMEOUT;
 
 	result = SendCommand("RP8", timeout);
 
@@ -354,52 +403,32 @@ int Network_GetDateTime(NetworkDateTime_t *dateTime, uint32_t timeout)
 	if (result == 0 && dateTime->year == 0)
 		result = -ERR_GENERIC;
 
+	xSemaphoreGive(xMutex);
+
 	return result;
 }
 
-int WaitForEmailSubject(char* subject, uint32_t timeout)
+int WaitForMessage(char* message, uint32_t timeout)
 {
 	int result = 0;
-	uint8_t tabCount = 0;
 
-	*subject = '\0';
+	*message = '\0';
 
-	while (result == 0 && *subject == '\0')
+	while (result == 0 && *message == '\0')
 	{
 		result = GetLine(rxLineAlt, timeout);
 
-		if (result > 0 &&
-			rxLineAlt[0] != '\0' &&
-			rxLineAlt[0] == '1' &&
-			rxLineAlt[1] == '\t')
+		if (result > 0 && strncmp(rxLineAlt, "I/", 2) != 0)
 		{
 			result = 0;
-			char *pch = rxLineAlt;
-
-			while (*pch != '\0')
-			{
-				if (*pch++ == '\t')
-					tabCount++;
-
-				if (tabCount == 3)
-				{
-					char *ch = subject;
-					while (*pch != '\t' && *pch != '\r' && *pch != '\0')
-						*ch++ = *pch++;
-
-					*ch = '\0';
-					break;
-				}
-			}
+			strcpy(message, rxLineAlt);
+			break;
 		}
 		else if (result > 0)
 		{
 			result = 0;
 		}
 	}
-
-	if (result == 0 && tabCount != 3)
-		result = -ERR_GENERIC;
 
 	return result;
 }
@@ -759,6 +788,7 @@ void USART_Configuration(void)
 	USART_Cmd(USART2, ENABLE);
 }
 
+#if 0
 /**
   * @brief  This function handles USART1 global interrupt request.
   * @param  None
@@ -779,6 +809,7 @@ void USART1_IRQHandler(void)
 		}
 	}
 }
+#endif
 
 /**
   * @brief  This function handles USART2 global interrupt request.

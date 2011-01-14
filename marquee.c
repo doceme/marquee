@@ -85,7 +85,8 @@ static xTaskHandle xMainTask = NULL;
 static NetworkState networkState = NetworkState_NotConnected;
 static NetworkWlanConnection_t networkConnection;
 static char response[80];
-static const uint32_t sleepDurations[NetworkState_Last] = { 3, 3, 20 };
+static char message[80];
+static const uint32_t sleepDurations[NetworkState_Last] = { 3, 3, 10 };
 static uint32_t sleepDuration;
 static uint8_t validTime = 0;
 static NetworkDateTime_t dateTime;
@@ -738,12 +739,14 @@ void GetDateTime(void)
 	else
 	{
 		validTime = 1;
+#if 0
 		tprintf("Year: %d\r\n", dateTime.year);
 		tprintf("Month: %d\r\n", dateTime.month);
 		tprintf("Day: %d\r\n", dateTime.day);
 		tprintf("Hours: %d\r\n", dateTime.hours);
 		tprintf("Minutes: %d\r\n", dateTime.minutes);
 		tprintf("Seconds: %d\r\n", dateTime.seconds);
+#endif
 
 		ShowIdle();
 
@@ -816,7 +819,9 @@ void OnButtonCallback(struct remote_button_t *button)
 	else
 	{
 		button_trailer = button->trailer;
+#if 0
 		tprintf("button[protocol=%d,mode=%d,trailer=%d,address=%d,data=%d]\r\n", button->protocol, button->mode, button->trailer, button->address, button->data);
+#endif
 	}
 
 	enum remote_buttons_t button_type = remote_button_type(button);
@@ -827,7 +832,9 @@ void OnButtonCallback(struct remote_button_t *button)
 	}
 	else
 	{
+#if 0
 		tprintf("button_type=%d, marquee_state=%d\r\n", button_type, marquee_state);
+#endif
 
 		switch (marquee_state)
 		{
@@ -835,6 +842,8 @@ void OnButtonCallback(struct remote_button_t *button)
 			{
 				if (button_type == REMOTE_BUTTON_OK)
 				{
+					int result;
+
 					if (marquee_prev_state == MARQUEE_STATE_IDLE)
 					{
 						ShowIdle();
@@ -842,6 +851,17 @@ void OnButtonCallback(struct remote_button_t *button)
 					else
 					{
 						marquee_change_state(marquee_prev_state);
+					}
+
+					result = Network_DeleteMessage(20000);
+
+					if (result == 0)
+					{
+						message[0] = '\0';
+					}
+					else
+					{
+						tprintf("Error deleting message!\r\n");
 					}
 				}
 			} break;
@@ -946,6 +966,9 @@ void Main_Task(void *pvParameters)
 	uint8_t messageTimeout = 0;
 	portTickType xLastWakeTime;
 
+	response[0] = '\0';
+	message[0] = '\0';
+
 	/* Initialise the xLastExecutionTime variable on task entry */
 	xLastWakeTime = xTaskGetTickCount();
 
@@ -962,8 +985,6 @@ void Main_Task(void *pvParameters)
 	result = Network_Configuration();
 	assert_param(result >= 0);
 
-	tprintf("Remote Test\r\n");
-
 	result = Remote_Configuration();
 	assert_param(result >= 0);
 
@@ -972,6 +993,8 @@ void Main_Task(void *pvParameters)
 
 	marquee_change_state(MARQUEE_STATE_MENU);
 	marquee_menu = (struct marquee_menu_t*)&marquee_menu_items[MARQUEE_MENU_TIMER];
+
+	tprintf("=== LED Marquee ===\r\n");
 
 #if 1
 	result = Network_SendWait("E0", "I/OK\r\n", DEFAULT_TIMEOUT);
@@ -1015,7 +1038,9 @@ void Main_Task(void *pvParameters)
 		{
 			case NetworkState_NotConnected:
 			{
+#ifdef DEBUG_STATE_NETWORK
 				tprintf("#networkState: NotConnected\r\n");
+#endif
 				//result = Network_SendGetByChar("!RP10", '\n', '\r', response, DEFAULT_TIMEOUT);
 				//result = Network_SendGetLine("!RP10", response, DEFAULT_TIMEOUT);
 				result = Network_GetWlanConnection(&networkConnection, DEFAULT_TIMEOUT);
@@ -1043,12 +1068,16 @@ void Main_Task(void *pvParameters)
 
 			case NetworkState_Connected:
 			{
+#ifdef DEBUG_STATE_NETWORK
 				tprintf("#networkState: Connected\r\n");
+#endif
 				result = Network_GetIPAddress(response, DEFAULT_TIMEOUT);
 
 				if (result == 0 && (strcmp(response, "0.0.0.0") != 0))
 				{
+#ifdef DEBUG_STATE_NETWORK
 					tprintf("IP: %s\r\n", response);
+#endif
 					LED_Clear();
 					LED_SetString(2, 0, response, 0);
 					LED_Refresh();
@@ -1061,24 +1090,28 @@ void Main_Task(void *pvParameters)
 
 			case NetworkState_Online:
 			{
+#ifdef DEBUG_STATE_NETWORK
 				tprintf("#networkState: Online\r\n");
+#endif
 				if (!validTime)
 				{
 					GetDateTime();
 				}
 
-				result = Network_GetEmail(response, NULL, 10000);
-				if (result == 0)
+				result = Network_GetMessage(response, 20000);
+				if (result == 0 && response[0] != '\0' && strcmp(response, message) != 0)
 				{
+					strcpy(message, response);
+					response[0] = '\0';
+
 					messageTimeout = 1;
 					marquee_change_state(MARQUEE_STATE_MESSAGE);
 
 					LED_Clear();
-					LED_SetString(0, 0, response, 0);
+					LED_SetString(0, 0, message, 0);
 					LED_Refresh();
 
 					Buzzer_Beep(2);
-					result = Network_SendWait("!RMM", "I/OK", DEFAULT_TIMEOUT);
 				}
 				else if (marquee_state == MARQUEE_STATE_IDLE)
 				{
@@ -1087,7 +1120,9 @@ void Main_Task(void *pvParameters)
 			} break;
 
 			default:
+#ifdef DEBUG_STATE_NETWORK
 				tprintf("#networkState: Invalid\r\n");
+#endif
 				assert_param(0);
 				break;
 		}
