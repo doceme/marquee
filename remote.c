@@ -826,7 +826,9 @@ void remote_task(void *pvParameters)
 			else
 			{
 				wait = portMAX_DELAY;
+#if DEBUG >= 1
 				tprintf("\r\n");
+#endif
 			}
 		}
 		else if (wait != portMAX_DELAY)
@@ -834,7 +836,9 @@ void remote_task(void *pvParameters)
 			pulse.prev_field = pulse.curr_field;
 			pulse.curr_field = REMOTE_FIELD_NONE;
 			wait = portMAX_DELAY;
+#if DEBUG >= 1
 			tprintf("\r\n");
+#endif
 		}
 	}
 }

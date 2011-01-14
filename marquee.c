@@ -81,7 +81,8 @@ __IO uint16_t ADCConvertedValue;
 
 /* Local Variables */
 static volatile uint8_t program = 0;
-static xTaskHandle xMainTask = NULL;
+static xTaskHandle xMainTask;
+static xSemaphoreHandle xMutex;
 static NetworkState networkState = NetworkState_NotConnected;
 static NetworkWlanConnection_t networkConnection;
 static char response[80];
@@ -257,6 +258,9 @@ inline void main_noreturn(void)
 	DMA_Configuration();
 	ADC_Configuration();
 	NVIC_Configuration();
+
+	xMutex = xSemaphoreCreateMutex();
+	assert_param(xMutex);
 
 	/* Create a FreeRTOS task */
 	xTaskCreate(Main_Task, (signed portCHAR *)"Main", configMINIMAL_STACK_SIZE , NULL, tskIDLE_PRIORITY + 1, &xMainTask);
@@ -622,6 +626,8 @@ void ShowIdle(void)
 		hours -= 12;
 	}
 
+	xSemaphoreTake(xMutex, portMAX_DELAY);
+
 	if (dateTime.hours >= 12)
 	{
 		tsprintf(response, "%d:%02dpm", hours, dateTime.minutes);
@@ -648,6 +654,8 @@ void ShowIdle(void)
 	LED_SetLine(1, response);
 #endif
 	/* LED_Refresh(); */
+
+	xSemaphoreGive(xMutex);
 }
 
 /**
@@ -858,10 +866,11 @@ void OnButtonCallback(struct remote_button_t *button)
 					if (result == 0)
 					{
 						message[0] = '\0';
+						tprintf("dismissed\r\n");
 					}
 					else
 					{
-						tprintf("Error deleting message!\r\n");
+						tprintf("error deleting message!\r\n");
 					}
 				}
 			} break;
@@ -963,7 +972,6 @@ void Main_Task(void *pvParameters)
 {
 	int result = 0;
 	uint8_t skipOneSleep = 0;
-	uint8_t messageTimeout = 0;
 	portTickType xLastWakeTime;
 
 	response[0] = '\0';
@@ -1041,24 +1049,12 @@ void Main_Task(void *pvParameters)
 #ifdef DEBUG_STATE_NETWORK
 				tprintf("#networkState: NotConnected\r\n");
 #endif
-				//result = Network_SendGetByChar("!RP10", '\n', '\r', response, DEFAULT_TIMEOUT);
-				//result = Network_SendGetLine("!RP10", response, DEFAULT_TIMEOUT);
 				result = Network_GetWlanConnection(&networkConnection, DEFAULT_TIMEOUT);
 
 				if (result == 0)
 				{
 					networkState = NetworkState_Connected;
 					skipOneSleep = 1;
-#if 0
-					if (strstr(response, "Completed") != NULL)
-					{
-						networkState = Connected;
-					}
-					else
-					{
-						tprintf("#%s!\r\n", response);
-					}
-#endif
 				}
 				else if (result == -ERR_TIMEOUT)
 				{
@@ -1071,6 +1067,9 @@ void Main_Task(void *pvParameters)
 #ifdef DEBUG_STATE_NETWORK
 				tprintf("#networkState: Connected\r\n");
 #endif
+				xSemaphoreTake(xMutex, portMAX_DELAY);
+				response[0] = '\0';
+
 				result = Network_GetIPAddress(response, DEFAULT_TIMEOUT);
 
 				if (result == 0 && (strcmp(response, "0.0.0.0") != 0))
@@ -1086,6 +1085,8 @@ void Main_Task(void *pvParameters)
 				}
 				else if (result == -ERR_TIMEOUT)
 					tprintf("#Timeout!\r\n");
+
+				xSemaphoreGive(xMutex);
 			} break;
 
 			case NetworkState_Online:
@@ -1098,23 +1099,29 @@ void Main_Task(void *pvParameters)
 					GetDateTime();
 				}
 
+				xSemaphoreTake(xMutex, portMAX_DELAY);
+				response[0] = '\0';
+
 				result = Network_GetMessage(response, 20000);
 				if (result == 0 && response[0] != '\0' && strcmp(response, message) != 0)
 				{
 					strcpy(message, response);
 					response[0] = '\0';
 
-					messageTimeout = 1;
+					tprintf("message: %s\r\n", message);
+
 					marquee_change_state(MARQUEE_STATE_MESSAGE);
 
 					LED_Clear();
 					LED_SetString(0, 0, message, 0);
 					LED_Refresh();
 
-					Buzzer_Beep(2);
+					//Buzzer_Beep(2);
+					xSemaphoreGive(xMutex);
 				}
 				else if (marquee_state == MARQUEE_STATE_IDLE)
 				{
+					xSemaphoreGive(xMutex);
 					ShowIdle();
 				}
 			} break;
