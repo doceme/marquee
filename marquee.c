@@ -82,11 +82,14 @@ __IO uint16_t ADCConvertedValue;
 /* Local Variables */
 static volatile uint8_t program = 0;
 static xTaskHandle xMainTask;
+#if DEBUG_MUTEX
 static xSemaphoreHandle xMutex;
+#endif
 static NetworkState networkState = NetworkState_NotConnected;
 static NetworkWlanConnection_t networkConnection;
 static char response[80];
 static char message[80];
+static char prev_message[80];
 static const uint32_t sleepDurations[NetworkState_Last] = { 3, 3, 10 };
 static uint32_t sleepDuration;
 static uint8_t validTime = 0;
@@ -259,8 +262,10 @@ inline void main_noreturn(void)
 	ADC_Configuration();
 	NVIC_Configuration();
 
+#if DEBUG_MUTEX
 	xMutex = xSemaphoreCreateMutex();
 	assert_param(xMutex);
+#endif
 
 	/* Create a FreeRTOS task */
 	xTaskCreate(Main_Task, (signed portCHAR *)"Main", configMINIMAL_STACK_SIZE , NULL, tskIDLE_PRIORITY + 1, &xMainTask);
@@ -626,7 +631,9 @@ void ShowIdle(void)
 		hours -= 12;
 	}
 
+#ifdef DEBUG_MUTEX
 	xSemaphoreTake(xMutex, portMAX_DELAY);
+#endif
 
 	if (dateTime.hours >= 12)
 	{
@@ -655,7 +662,9 @@ void ShowIdle(void)
 #endif
 	/* LED_Refresh(); */
 
+#ifdef DEBUG_MUTEX
 	xSemaphoreGive(xMutex);
+#endif
 }
 
 /**
@@ -974,7 +983,7 @@ void Main_Task(void *pvParameters)
 	uint8_t skipOneSleep = 0;
 	portTickType xLastWakeTime;
 
-	response[0] = '\0';
+	prev_message[0] = '\0';
 	message[0] = '\0';
 
 	/* Initialise the xLastExecutionTime variable on task entry */
@@ -1067,7 +1076,9 @@ void Main_Task(void *pvParameters)
 #ifdef DEBUG_STATE_NETWORK
 				tprintf("#networkState: Connected\r\n");
 #endif
+#ifdef DEBUG_MUTEX
 				xSemaphoreTake(xMutex, portMAX_DELAY);
+#endif
 				response[0] = '\0';
 
 				result = Network_GetIPAddress(response, DEFAULT_TIMEOUT);
@@ -1086,7 +1097,9 @@ void Main_Task(void *pvParameters)
 				else if (result == -ERR_TIMEOUT)
 					tprintf("#Timeout!\r\n");
 
+#ifdef DEBUG_MUTEX
 				xSemaphoreGive(xMutex);
+#endif
 			} break;
 
 			case NetworkState_Online:
@@ -1099,14 +1112,16 @@ void Main_Task(void *pvParameters)
 					GetDateTime();
 				}
 
+#ifdef DEBUG_MUTEX
 				xSemaphoreTake(xMutex, portMAX_DELAY);
-				response[0] = '\0';
+#endif
+				prev_message[0] = '\0';
 
-				result = Network_GetMessage(response, 20000);
-				if (result == 0 && response[0] != '\0' && strcmp(response, message) != 0)
+				result = Network_GetMessage(prev_message, 20000);
+				if (result == 0 && prev_message[0] != '\0' && strcmp(prev_message, message) != 0)
 				{
-					strcpy(message, response);
-					response[0] = '\0';
+					strcpy(message, prev_message);
+					prev_message[0] = '\0';
 
 					tprintf("message: %s\r\n", message);
 
@@ -1117,11 +1132,15 @@ void Main_Task(void *pvParameters)
 					LED_Refresh();
 
 					Buzzer_Beep(2);
+#ifdef DEBUG_MUTEX
 					xSemaphoreGive(xMutex);
+#endif
 				}
 				else if (marquee_state == MARQUEE_STATE_IDLE)
 				{
+#ifdef DEBUG_MUTEX
 					xSemaphoreGive(xMutex);
+#endif
 					ShowIdle();
 				}
 			} break;
