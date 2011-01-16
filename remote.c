@@ -778,7 +778,6 @@ void remote_task(void *pvParameters)
 	portTickType wait = portMAX_DELAY;
 	struct remote_pulse_t pulse;
 	struct remote_button_t button;
-	struct remote_button_t button_copy;
 
 	/* Initialise the xLastExecutionTime variable on task entry */
 	xLastWakeTime = xTaskGetTickCount();
@@ -803,8 +802,7 @@ void remote_task(void *pvParameters)
 			{
 				if (remote_decode_pulse(&pulse, &button) == 0)
 				{
-					button_copy = button;
-					xQueueSendToBack(remote_queue, &button_copy, 0);
+					xQueueSendToBack(remote_queue, &button, 0);
 				}
 #if DEBUG >= 2
 				remote_print_pulse(&pulse);

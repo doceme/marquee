@@ -55,7 +55,6 @@ enum marquee_state_t
 	MARQUEE_STATE_MESSAGE,
 	MARQUEE_STATE_MENU,
 	MARQUEE_STATE_SET_TIMER,
-	MARQUEE_STATE_TIMER,
 	MARQUEE_STATE_CONTACT
 };
 
@@ -74,6 +73,16 @@ struct marquee_menu_t
 	char *text;
 };
 
+enum marquee_set_timer_state_t
+{
+	MARQUEE_SET_TIMER_STATE_NONE,
+	MARQUEE_SET_TIMER_STATE_MIN_HI,
+	MARQUEE_SET_TIMER_STATE_MIN_LO,
+	MARQUEE_SET_TIMER_STATE_SEC_HI,
+	MARQUEE_SET_TIMER_STATE_SEC_LO,
+	MARQUEE_SET_TIMER_STATE_LAST
+};
+
 /* Global Variables */
 __IO uint16_t ADCConvertedValue;
 
@@ -84,9 +93,7 @@ static xTaskHandle xRemoteTask;
 static xTaskHandle xRTCTask;
 static xQueueHandle xRTCQueue;
 static xQueueHandle xRemoteQueue;
-#if DEBUG_MUTEX
-static xSemaphoreHandle xMutex;
-#endif
+static xSemaphoreHandle xCursorMutex;
 static NetworkState networkState = NetworkState_NotConnected;
 static NetworkWlanConnection_t networkConnection;
 static char response[80];
@@ -103,6 +110,10 @@ static struct marquee_menu_t *marquee_menu;
 static uint8_t button_trailer = 2;
 static uint8_t cursor_pos;
 static uint8_t cursor_state;
+static enum marquee_set_timer_state_t set_timer_state;
+static uint8_t set_timer_data[MARQUEE_SET_TIMER_STATE_LAST];
+static const uint8_t set_timer_cursors[MARQUEE_SET_TIMER_STATE_LAST] = { 45, 45, 51, 63, 69 };
+static int timer_seconds = -1;
 
 static const struct marquee_menu_t marquee_menu_items[] =
 {
@@ -272,10 +283,8 @@ inline void main_noreturn(void)
 	ADC_Configuration();
 	NVIC_Configuration();
 
-#if DEBUG_MUTEX
-	xMutex = xSemaphoreCreateMutex();
-	assert_param(xMutex);
-#endif
+	xCursorMutex = xSemaphoreCreateMutex();
+	assert_param(xCursorMutex);
 
 	/* Create the main task */
 	xTaskCreate(Main_Task, (signed portCHAR *)"Main", configMINIMAL_STACK_SIZE , NULL, tskIDLE_PRIORITY + 1, &xMainTask);
@@ -640,10 +649,6 @@ void ShowIdle(void)
 		hours -= 12;
 	}
 
-#ifdef DEBUG_MUTEX
-	xSemaphoreTake(xMutex, portMAX_DELAY);
-#endif
-
 	if (dateTime.hours >= 12)
 	{
 		tsprintf(response, "%d:%02dpm", hours, dateTime.minutes);
@@ -653,27 +658,14 @@ void ShowIdle(void)
 		tsprintf(response, "%d:%02dam", hours, dateTime.minutes);
 	}
 
-#ifdef DEBUG_AMBIENT
-	LED_SetLine(0, response);
-#else
-	/* LED_SetMiddleLine(response); */
 	LED_Clear();
 	LED_SetString(2, 42, response, 0);
-	LED_Refresh();
-#endif
+
+	if (timer_seconds < 0)
+		LED_Refresh();
 
 	brightness = GetLedBrightnessFromADC(adcValue);
 	LED_SetBrightness(brightness);
-#ifdef DEBUG_AMBIENT
-	tprintf("Brightness,ADC: %d,%d\r\n", brightness, adcValue);
-	tsprintf(response, "%d %d", brightness, adcValue);
-	LED_SetLine(1, response);
-#endif
-	/* LED_Refresh(); */
-
-#ifdef DEBUG_MUTEX
-	xSemaphoreGive(xMutex);
-#endif
 }
 
 /**
@@ -824,6 +816,12 @@ static enum remote_buttons_t remote_button_type(struct remote_button_t *button)
 	return result;
 }
 
+static void inline marquee_update_cursor()
+{
+	cursor_state ^= 1;
+	LED_DrawCursor(1, cursor_pos, cursor_state);
+}
+
 static void remote_handle_button(struct remote_button_t *button)
 {
 	if ((button->trailer == button_trailer) && (button_trailer != 2))
@@ -840,8 +838,12 @@ static void remote_handle_button(struct remote_button_t *button)
 
 	enum remote_buttons_t button_type = remote_button_type(button);
 
-	if ((button_type == REMOTE_BUTTON_EXIT) && (marquee_state != MARQUEE_STATE_IDLE))
+	if (((button_type == REMOTE_BUTTON_EXIT) && (marquee_state != MARQUEE_STATE_IDLE)) ||
+		((button_type == REMOTE_BUTTON_OK) && (marquee_state == MARQUEE_STATE_IDLE) && (timer_seconds == 0)))
 	{
+		if (timer_seconds == 0)
+			timer_seconds = -1;
+
 		ShowIdle();
 	}
 	else
@@ -885,6 +887,7 @@ static void remote_handle_button(struct remote_button_t *button)
 			{
 				switch (button_type)
 				{
+					case REMOTE_BUTTON_MENU:
 					case REMOTE_BUTTON_DOWN:
 					{
 						marquee_change_state(MARQUEE_STATE_MENU);
@@ -950,11 +953,13 @@ static void remote_handle_button(struct remote_button_t *button)
 					{
 						if (marquee_menu->item == MARQUEE_MENU_TIMER)
 						{
-							cursor_pos = 45;
+							set_timer_state = MARQUEE_SET_TIMER_STATE_MIN_HI;
+							memset(set_timer_data, 0, sizeof(set_timer_data));
 							marquee_change_state(MARQUEE_STATE_SET_TIMER);
+							cursor_pos = set_timer_cursors[set_timer_state];
 							LED_Clear();
 							LED_SetString(0, 37, "Set time", 0);
-							LED_SetString(1, 45, "00:00", 1);
+							LED_SetString(1, cursor_pos, "00:00", 1);
 							LED_Refresh();
 						}
 						else
@@ -966,6 +971,119 @@ static void remote_handle_button(struct remote_button_t *button)
 					default:
 						break;
 				}
+			} break;
+
+			case MARQUEE_STATE_SET_TIMER:
+			{
+				char cursor_string[] = "0";
+				uint8_t max_digit = 9;
+
+				if (set_timer_state == MARQUEE_SET_TIMER_STATE_SEC_HI)
+					max_digit = 5;
+
+				xSemaphoreTake(xCursorMutex, portMAX_DELAY);
+
+				if (button_type >= REMOTE_BUTTON_0 && button_type <= REMOTE_BUTTON_9)
+				{
+					if (button->data <= max_digit)
+					{
+						set_timer_data[set_timer_state] = button->data;
+						cursor_string[0] += set_timer_data[set_timer_state];
+						cursor_state = 1;
+						marquee_update_cursor();
+						LED_SetString(1, cursor_pos, cursor_string, 1);
+						LED_Refresh();
+
+						if (set_timer_state != MARQUEE_SET_TIMER_STATE_SEC_LO)
+						{
+							set_timer_state++;
+						}
+						else
+						{
+							set_timer_state = MARQUEE_SET_TIMER_STATE_MIN_HI;
+						}
+					}
+				}
+				else if (button_type == REMOTE_BUTTON_LEFT)
+				{
+					if (set_timer_state != MARQUEE_SET_TIMER_STATE_MIN_HI)
+					{
+						set_timer_state--;
+					}
+					else
+					{
+						set_timer_state = MARQUEE_SET_TIMER_STATE_SEC_LO;
+					}
+
+					cursor_state = 1;
+					marquee_update_cursor();
+				}
+				else if (button_type == REMOTE_BUTTON_RIGHT)
+				{
+					if (set_timer_state != MARQUEE_SET_TIMER_STATE_SEC_LO)
+					{
+						set_timer_state++;
+					}
+					else
+					{
+						set_timer_state = MARQUEE_SET_TIMER_STATE_MIN_HI;
+					}
+
+					cursor_state = 1;
+					marquee_update_cursor();
+				}
+				else if (button_type == REMOTE_BUTTON_UP)
+				{
+					if (set_timer_data[set_timer_state] < max_digit)
+					{
+						set_timer_data[set_timer_state]++;
+					}
+					else
+					{
+						set_timer_data[set_timer_state] = 0;
+					}
+
+					cursor_string[0] += set_timer_data[set_timer_state];
+					cursor_state = 1;
+					marquee_update_cursor();
+					LED_SetString(1, cursor_pos, cursor_string, 1);
+					LED_Refresh();
+				}
+				else if (button_type == REMOTE_BUTTON_DOWN)
+				{
+					if (set_timer_data[set_timer_state] > 0)
+					{
+						set_timer_data[set_timer_state]--;
+					}
+					else
+					{
+						set_timer_data[set_timer_state] = max_digit;
+					}
+
+					cursor_string[0] += set_timer_data[set_timer_state];
+					cursor_state = 1;
+					marquee_update_cursor();
+					LED_SetString(1, cursor_pos, cursor_string, 1);
+					LED_Refresh();
+				}
+				else if (button_type == REMOTE_BUTTON_OK)
+				{
+					timer_seconds = set_timer_data[MARQUEE_SET_TIMER_STATE_MIN_HI] * 10 * 60;
+					timer_seconds += set_timer_data[MARQUEE_SET_TIMER_STATE_MIN_LO] * 60;
+					timer_seconds += set_timer_data[MARQUEE_SET_TIMER_STATE_SEC_HI] * 10;
+					timer_seconds += set_timer_data[MARQUEE_SET_TIMER_STATE_SEC_LO];
+
+					if (timer_seconds == 0)
+						timer_seconds = -1;
+
+					cursor_state = 1;
+					marquee_update_cursor();
+
+					ShowIdle();
+				}
+
+				cursor_pos = set_timer_cursors[set_timer_state];
+				xSemaphoreGive(xCursorMutex);
 			} break;
 
 			default:
@@ -1007,8 +1125,23 @@ void RTC_Task(void *pvParameters)
 
 			if (marquee_state == MARQUEE_STATE_SET_TIMER)
 			{
-				cursor_state ^= 1;
-				LED_DrawCursor(1, cursor_pos, cursor_state);
+				xSemaphoreTake(xCursorMutex, portMAX_DELAY);
+				marquee_update_cursor();
+				xSemaphoreGive(xCursorMutex);
+			}
+
+			if (timer_seconds >= 0 && (marquee_state == MARQUEE_STATE_IDLE))
+			{
+				ShowIdle();
+				tsprintf(response, "%02d:%02d", timer_seconds / 60, timer_seconds % 60);
+				LED_SetString(0, 0, response, 0);
+				LED_Refresh();
+
+				if (timer_seconds == 0)
+					Buzzer_Beep(2);
+
+				if (timer_seconds > 0)
+					timer_seconds--;
 			}
 		}
 	}
@@ -1137,9 +1270,6 @@ void Main_Task(void *pvParameters)
 #ifdef DEBUG_STATE_NETWORK
 				tprintf("#networkState: Connected\r\n");
 #endif
-#ifdef DEBUG_MUTEX
-				xSemaphoreTake(xMutex, portMAX_DELAY);
-#endif
 				response[0] = '\0';
 
 				result = Network_GetIPAddress(response, DEFAULT_TIMEOUT);
@@ -1157,10 +1287,6 @@ void Main_Task(void *pvParameters)
 				}
 				else if (result == -ERR_TIMEOUT)
 					tprintf("#Timeout!\r\n");
-
-#ifdef DEBUG_MUTEX
-				xSemaphoreGive(xMutex);
-#endif
 			} break;
 
 			case NetworkState_Online:
@@ -1173,9 +1299,6 @@ void Main_Task(void *pvParameters)
 					GetDateTime();
 				}
 
-#ifdef DEBUG_MUTEX
-				xSemaphoreTake(xMutex, portMAX_DELAY);
-#endif
 				prev_message[0] = '\0';
 
 				result = Network_GetMessage(prev_message, DEFAULT_TIMEOUT);
@@ -1193,15 +1316,9 @@ void Main_Task(void *pvParameters)
 					LED_Refresh();
 
 					Buzzer_Beep(2);
-#ifdef DEBUG_MUTEX
-					xSemaphoreGive(xMutex);
-#endif
 				}
 				else if (marquee_state == MARQUEE_STATE_IDLE)
 				{
-#ifdef DEBUG_MUTEX
-					xSemaphoreGive(xMutex);
-#endif
 					ShowIdle();
 				}
 			} break;

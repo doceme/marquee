@@ -4,7 +4,7 @@
  * 2009-2010 Michal Demin
  *
  */
-#include <stdint.h>
+#include "stm32f10x.h"
 
 void MemManage_Handler(void) __attribute__((naked));
 void BusFault_Handler(void) __attribute__ ((naked));
@@ -24,6 +24,11 @@ struct stack_t {
 void fault_halt(struct stack_t *stack)
 {
 	(void)stack;
+
+	if (CoreDebug->DHCSR & 1) {
+		__asm volatile("bkpt 0");
+	}
+
 	/* Inspect faulty_stack->pc to locate the offending instruction. */
 	while(1);
 }
