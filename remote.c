@@ -156,7 +156,7 @@ struct remote_pulse_t
 	uint8_t half;
 };
 
-void (*remote_callback)(struct remote_button_t *button) = NULL;
+xQueueHandle remote_queue = NULL;
 
 /* Local Variables */
 static enum remote_state_t remote_state;
@@ -186,23 +186,18 @@ int Remote_Configuration(void)
 	NVIC_Configuration();
 	Timer_Configuration(REMOTE_STATE_FREQ);
 
+	remote_queue = xQueueCreate(4, sizeof(struct remote_button_t));
+	assert_param(remote_queue);
+
 	xTaskCreate(remote_task, (signed portCHAR *)"Remote", configMINIMAL_STACK_SIZE , NULL, tskIDLE_PRIORITY + 1, &xRemoteTask);
 	assert_param(xRemoteTask);
-
-	timer_queue = xQueueCreate(256, sizeof(uint16_t));
-	assert_param(timer_queue);
 
 	return 0;
 }
 
-int Remote_SetCallback(void (*callback)(struct remote_button_t *button))
+xQueueHandle Remote_GetButtonQueue()
 {
-	if (callback)
-	{
-		remote_callback = callback;
-	}
-
-	return 0;
+	return remote_queue;
 }
 
 /**
@@ -790,6 +785,9 @@ void remote_task(void *pvParameters)
 
 	pulse.curr_field = REMOTE_FIELD_NONE;
 
+	timer_queue = xQueueCreate(256, sizeof(uint16_t));
+	assert_param(timer_queue);
+
 	for(;;)
 	{
 		uint16_t time;
@@ -803,10 +801,10 @@ void remote_task(void *pvParameters)
 
 			if (pulse.curr_time != REMOTE_PULSE_UNKNOWN)
 			{
-				if ((remote_decode_pulse(&pulse, &button) == 0) && remote_callback)
+				if (remote_decode_pulse(&pulse, &button) == 0)
 				{
 					button_copy = button;
-					remote_callback(&button_copy);
+					xQueueSendToBack(remote_queue, &button_copy, 0);
 				}
 #if DEBUG >= 2
 				remote_print_pulse(&pulse);

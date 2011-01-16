@@ -50,7 +50,7 @@ defined in linker script */
 .word  _ebss
 /* stack used for SystemInit_ExtMemCtl; always internal RAM used */
 
-.equ  Initial_spTop,  0x20002000
+.equ  Initial_spTop,  0x20003000
 .equ  BootRAM,        0xF1E0F85F
 /**
  * @brief  This is the code that gets called when the processor first

@@ -49,11 +49,11 @@ struct remote_button_t
 int Remote_Configuration(void);
 
 /**
- * @brief  Sets the remote callback
+ * @brief  Returns the button queue for press events
  * @param  None
  * @retval None
  */
-int Remote_SetCallback(void (*callback)(struct remote_button_t *button));
+xQueueHandle Remote_GetButtonQueue();
 
 
 #endif /* REMOTE_H */

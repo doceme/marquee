@@ -109,7 +109,7 @@ SRC += $(RTOSDIR)/tasks.c
 
 ## RTOS Portable 
 SRC += $(RTOSDIR)/portable/GCC/ARM_CM3/port.c
-SRC += $(RTOSDIR)/portable/MemMang/heap_2.c
+SRC += $(RTOSDIR)/portable/MemMang/heap_1.c
 
 # List C source files here which must be compiled in ARM-Mode (no -mthumb).
 # use file-extension c for "c-only"-files

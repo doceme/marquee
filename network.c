@@ -822,19 +822,14 @@ void USART2_IRQHandler(void)
 
 	if(USART_GetITStatus(USART2, USART_IT_RXNE) != RESET)
 	{
-		if (xBusyMutex)
-		{
-			char ch;
-
-			/* Read one character and enqueue */
-			ch = USART_ReceiveData(USART2);
-			xQueueSendToBackFromISR(xQueue, &ch, &xHigherPriorityTaskWoken);
+		/* Read one character and enqueue */
+		char ch = USART_ReceiveData(USART2);
+		xQueueSendToBackFromISR(xQueue, &ch, &xHigherPriorityTaskWoken);
 
 #if 0
-			if (USART_GetFlagStatus(USART1, USART_FLAG_TXE) != RESET)
-				USART_SendData(USART1, ch);
+		if (USART_GetFlagStatus(USART1, USART_FLAG_TXE) != RESET)
+			USART_SendData(USART1, ch);
 #endif
-		}
 
 		/* Clear interrupt */
 		USART_ClearITPendingBit(USART2, USART_IT_RXNE);

@@ -90,7 +90,6 @@ int Buzzer_SetOffDuration(uint32_t duration)
 
 int Buzzer_Beep(uint32_t count)
 {
-	BUSY(BUZZER);
 	beepCount = count;
 	curOnDuration = onDuration;
 	curOffDuration = offDuration;
@@ -258,7 +257,6 @@ void TIM5_IRQHandler(void)
 			/* Disable timer counters */
 			TIM_Cmd(BUZZER_PWM_TIMER, DISABLE);
 			TIM_Cmd(BUZZER_TOGGLE_TIMER, DISABLE);
-			IDLE_ISR(BUZZER);
 		}
 
 		TIM_ClearITPendingBit(BUZZER_TOGGLE_TIMER, BUZZER_IT);
