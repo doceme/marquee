@@ -1,5 +1,4 @@
-/**
- ******************************************************************************
+/** ******************************************************************************
  *
  * @file       marquee.c
  * @author     Stephen Caudle Copyright (C) 2010
@@ -98,7 +97,6 @@ static NetworkState networkState = NetworkState_NotConnected;
 static NetworkWlanConnection_t networkConnection;
 static char response[80];
 static char message[80];
-static char prev_message[80];
 static const uint32_t sleepDurations[NetworkState_Last] = { 3, 3, 10 };
 static uint32_t sleepDuration;
 static uint8_t validTime = 0;
@@ -114,6 +112,7 @@ static enum marquee_set_timer_state_t set_timer_state;
 static uint8_t set_timer_data[MARQUEE_SET_TIMER_STATE_LAST];
 static const uint8_t set_timer_cursors[MARQUEE_SET_TIMER_STATE_LAST] = { 45, 45, 51, 63, 69 };
 static int timer_seconds = -1;
+static uint8_t dismiss_failed = 0;
 
 static const struct marquee_menu_t marquee_menu_items[] =
 {
@@ -234,8 +233,11 @@ static void main_noreturn(void) NORETURN;
 
 static inline void marquee_change_state(enum marquee_state_t state)
 {
-	marquee_prev_state = marquee_state;
-	marquee_state = state;
+	if (state != marquee_state)
+	{
+		marquee_prev_state = marquee_state;
+		marquee_state = state;
+	}
 }
 
 void OnButtonCallback(struct remote_button_t *button);
@@ -289,10 +291,6 @@ inline void main_noreturn(void)
 	/* Create the main task */
 	xTaskCreate(Main_Task, (signed portCHAR *)"Main", configMINIMAL_STACK_SIZE , NULL, tskIDLE_PRIORITY + 1, &xMainTask);
 	assert_param(xMainTask);
-
-	/* Create the RTC task */
-	xTaskCreate(RTC_Task, (signed portCHAR *)"RTC", configMINIMAL_STACK_SIZE , NULL, tskIDLE_PRIORITY + 2, &xRTCTask);
-	assert_param(xRTCTask);
 
 	/* Start the FreeRTOS scheduler */
 	vTaskStartScheduler();
@@ -411,12 +409,6 @@ void RTC_Configuration(void)
 
 	/* Wait until last write operation on RTC registers has finished */
 	RTC_WaitForLastTask();
-
-	/* Enable the RTC Alarm interrupt */
-	//RTC_ITConfig(RTC_IT_ALR, ENABLE);
-
-	/* Wait until last write operation on RTC registers has finished */
-	RTC_WaitForLastTask();
 }
 
 /**
@@ -509,13 +501,13 @@ void NVIC_Configuration(void)
 
 	//NVIC_InitStructure.NVIC_IRQChannel = RTCAlarm_IRQn;
 	NVIC_InitStructure.NVIC_IRQChannel = RTC_IRQn;
-	NVIC_InitStructure.NVIC_IRQChannelPreemptionPriority = 0x1;
+	NVIC_InitStructure.NVIC_IRQChannelPreemptionPriority = 0xc;
 	NVIC_InitStructure.NVIC_IRQChannelCmd = ENABLE;
 	NVIC_Init(&NVIC_InitStructure);
 
 	/* Enable and set Button EXTI Interrupt to the lowest priority */
 	NVIC_InitStructure.NVIC_IRQChannel = EXTI15_10_IRQn;
-	NVIC_InitStructure.NVIC_IRQChannelPreemptionPriority = 0xf;
+	NVIC_InitStructure.NVIC_IRQChannelPreemptionPriority = 0xe;
 	NVIC_InitStructure.NVIC_IRQChannelCmd = ENABLE;
 
 	NVIC_Init(&NVIC_InitStructure);
@@ -579,6 +571,10 @@ void vApplicationStackOverflowHook(xTaskHandle *pxTask, signed portCHAR *pcTaskN
 	if (pcTaskName)
 		tprintf("Stack overflow! task=%s\r\n");
 
+	if (CoreDebug->DHCSR & 1) {
+		__asm volatile("bkpt 0");
+	}
+
 	while (1);
 }
 
@@ -640,26 +636,30 @@ void ShowIdle(void)
 	marquee_change_state(MARQUEE_STATE_IDLE);
 	marquee_menu = (struct marquee_menu_t*)&marquee_menu_items[MARQUEE_MENU_NONE];
 
-	if (dateTime.hours == 0)
-	{
-		hours = 12;
-	}
-	else if (dateTime.hours > 12)
-	{
-		hours -= 12;
-	}
-
-	if (dateTime.hours >= 12)
-	{
-		tsprintf(response, "%d:%02dpm", hours, dateTime.minutes);
-	}
-	else
-	{
-		tsprintf(response, "%d:%02dam", hours, dateTime.minutes);
-	}
-
 	LED_Clear();
-	LED_SetString(2, 42, response, 0);
+
+	if (validTime)
+	{
+		if (dateTime.hours == 0)
+		{
+			hours = 12;
+		}
+		else if (dateTime.hours > 12)
+		{
+			hours -= 12;
+		}
+
+		if (dateTime.hours >= 12)
+		{
+			tsprintf(response, "%d:%02dpm", hours, dateTime.minutes);
+		}
+		else
+		{
+			tsprintf(response, "%d:%02dam", hours, dateTime.minutes);
+		}
+
+		LED_SetString(2, 42, response, 0);
+	}
 
 	if (timer_seconds < 0)
 		LED_Refresh();
@@ -679,21 +679,28 @@ void RTC_IRQHandler(void)
 
 	if(RTC_GetITStatus(RTC_IT_SEC) != RESET)
 	{
-		uint32_t counter = RTC_GetCounter();
+		uint32_t counter;
 
-		if (xRTCQueue)
-			xQueueSendToBackFromISR(xRTCQueue, &counter, &xHigherPriorityTaskWoken);
+		/* Clear RTC Alarm interrupt pending bit */
+		RTC_ClearITPendingBit(RTC_IT_SEC);
 
 		/* Wait until last write operation on RTC registers has finished */
 		RTC_WaitForLastTask();
 
-		/* Clear RTC Alarm interrupt pending bit */
-		RTC_ClearITPendingBit(RTC_IT_SEC);
+		counter = RTC_GetCounter();
+
+		if (xRTCQueue)
+		{
+			uint32_t dummy;
+			while (xQueueReceiveFromISR(xRTCQueue, &dummy, &xHigherPriorityTaskWoken));
+			xQueueSendToBackFromISR(xRTCQueue, &counter, &xHigherPriorityTaskWoken);
+		}
 
 		/* Reset RTC Counter when Time is 23:59:59 */
 		if (counter == 0x00015180)
 		{
 			RTC_SetCounter(0);
+
 			/* Wait until last write operation on RTC registers has finished */
 			RTC_WaitForLastTask();
 		}
@@ -874,10 +881,12 @@ static void remote_handle_button(struct remote_button_t *button)
 					if (result == 0)
 					{
 						message[0] = '\0';
+						dismiss_failed = 0;
 						tprintf("dismissed\r\n");
 					}
 					else
 					{
+						dismiss_failed = 1;
 						tprintf("error deleting message!\r\n");
 					}
 				}
@@ -1104,6 +1113,9 @@ void RTC_Task(void *pvParameters)
 	xRTCQueue = xQueueCreate(1, sizeof(uint32_t));
 	assert_param(xRTCQueue);
 
+	/* Enable the RTC second interrupt */
+	RTC_ITConfig(RTC_IT_SEC, ENABLE);
+
 	for (;;)
 	{
 		uint32_t counter;
@@ -1172,8 +1184,9 @@ void Main_Task(void *pvParameters)
 	int result = 0;
 	uint8_t skipOneSleep = 0;
 	portTickType xLastWakeTime;
+	static char check_message[80];
 
-	prev_message[0] = '\0';
+	check_message[0] = '\0';
 	message[0] = '\0';
 
 	/* Initialise the xLastExecutionTime variable on task entry */
@@ -1186,6 +1199,11 @@ void Main_Task(void *pvParameters)
 	result = LED_Configuration();
 	assert_param(result >= 0);
 
+	LED_Clear();
+	tsprintf(response, "Loading...");
+	LED_SetString(2, 35, response, 0);
+	LED_Refresh();
+
 	result = Network_Configuration();
 	assert_param(result >= 0);
 
@@ -1193,17 +1211,20 @@ void Main_Task(void *pvParameters)
 	assert_param(result >= 0);
 
 	xRemoteQueue = Remote_GetButtonQueue();
-	assert_param(xRemoteQueue);
+
+	while (!xRemoteQueue)
+	{
+		vTaskDelay(10);
+		xRemoteQueue = Remote_GetButtonQueue();
+	}
 
 	/* Create the remote task */
-	xTaskCreate(Remote_Task, (signed portCHAR *)"Remote", configMINIMAL_STACK_SIZE , NULL, tskIDLE_PRIORITY + 3, &xRemoteTask);
+	xTaskCreate(Remote_Task, (signed portCHAR *)"Remote", configMINIMAL_STACK_SIZE , NULL, tskIDLE_PRIORITY + 2, &xRemoteTask);
 	assert_param(xRemoteTask);
 
-	/* Enable the RTC second interrupt */
-	RTC_ITConfig(RTC_IT_SEC, ENABLE);
-
-	marquee_change_state(MARQUEE_STATE_MENU);
-	marquee_menu = (struct marquee_menu_t*)&marquee_menu_items[MARQUEE_MENU_TIMER];
+	/* Create the RTC task */
+	xTaskCreate(RTC_Task, (signed portCHAR *)"RTC", configMINIMAL_STACK_SIZE , NULL, tskIDLE_PRIORITY + 3, &xRTCTask);
+	assert_param(xRTCTask);
 
 	tprintf("=== LED Marquee ===\r\n");
 
@@ -1223,27 +1244,10 @@ void Main_Task(void *pvParameters)
 	assert_param(result >= 0);
 #endif
 
-#if 0
-	xQueue = xQueueCreate(10, sizeof(char));
-	assert_param(xQueue);
-#endif
-
 	for(;;)
 	{
 		skipOneSleep = 0;
 		sleepDuration = sleepDurations[networkState];
-#if 0
-		portBASE_TYPE result = xQueueReceive(xQueue, &ch, portMAX_DELAY);
-		if (result)
-		{
-			tprintf("%c\r\n", ch);
-		}
-		else
-		{
-			tprintf("!result\r\n");
-		}
-#endif
-//		BUSY(MARQUEE);
 
 		switch (networkState)
 		{
@@ -1299,13 +1303,14 @@ void Main_Task(void *pvParameters)
 					GetDateTime();
 				}
 
-				prev_message[0] = '\0';
+				check_message[0] = '\0';
 
-				result = Network_GetMessage(prev_message, DEFAULT_TIMEOUT);
-				if (result == 0 && prev_message[0] != '\0' && strcmp(prev_message, message) != 0)
+				result = Network_GetMessage(check_message, DEFAULT_TIMEOUT);
+				if (result == 0 &&
+					(check_message[0] != '\0') &&
+					(strcmp(message, check_message) != 0))
 				{
-					strcpy(message, prev_message);
-					prev_message[0] = '\0';
+					strcpy(message, check_message);
 
 					tprintf("message: %s\r\n", message);
 
@@ -1317,9 +1322,18 @@ void Main_Task(void *pvParameters)
 
 					Buzzer_Beep(2);
 				}
-				else if (marquee_state == MARQUEE_STATE_IDLE)
+				else
 				{
-					ShowIdle();
+					if (dismiss_failed)
+					{
+						result = Network_DeleteMessage(DEFAULT_TIMEOUT);
+
+						if (result == 0)
+						{
+							message[0] = '\0';
+							dismiss_failed = 0;
+						}
+					}
 				}
 			} break;
 
@@ -1331,7 +1345,6 @@ void Main_Task(void *pvParameters)
 				break;
 		}
 
-//		IDLE(MARQUEE);
 #ifndef DEBUG
 		if (!skipOneSleep)
 			vTaskSuspend(NULL);

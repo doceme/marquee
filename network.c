@@ -30,7 +30,7 @@
 #include "tprintf.h"
 #include "string.h"
 
-#define USART_NVIC_PRIO		IRQ_PRIO_HIGHEST
+#define USART_NVIC_PRIO		0xf
 
 #define NETWORK_APB1_PERIPH 	RCC_APB1Periph_USART2
 #define NETWORK_APB2_PERIPH 	RCC_APB2Periph_GPIOA | RCC_APB2Periph_AFIO
@@ -313,7 +313,16 @@ int Network_GetMessage(char* message, uint32_t timeout)
 		result = WaitForMessage(message, timeout);
 
 		if (result == 0)
+		{
 			result = WaitForResponse("I/ONLINE", timeout);
+
+			if (result == 0 && 
+				((strcmp(message, "error") == 0) || strcmp(message, "denied") == 0))
+			{
+				message[0] = '\0';
+				result = -ERR_GENERIC;
+			}
+		}
 	}
 
 	xSemaphoreGive(xMutex);
@@ -446,8 +455,6 @@ int SendCommand(char *command, uint32_t timeout)
 	/* Empty the receive queue */
 	while (xQueueReceive(xQueue, ch, 0));
 
-	portENTER_CRITICAL();
-
 	txIndex = 0;
 	txSize = 0;
 
@@ -476,8 +483,6 @@ int SendCommand(char *command, uint32_t timeout)
 
 	/* Enable transmit empty interrupt */
 	USART_ITConfig(USART2, USART_IT_TXE, ENABLE);
-
-	portEXIT_CRITICAL();
 
 	return result;
 }

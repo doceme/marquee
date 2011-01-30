@@ -36,7 +36,7 @@
 #endif
 
 /* Defines */
-#define REMOTE_NVIC_PRIO	IRQ_PRIO_HIGHEST
+#define REMOTE_NVIC_PRIO	0xd
 
 #define DEFAULT_BEEP_DURATION	100 /* 500ms = 1/2 second */
 
@@ -101,8 +101,7 @@ static uint8_t remote_data_bits[] =
 #if 0
 static uint16_t codes[][] =
 {
-	{
-		REMOTE_PULSE_LEADER | REMOTE_PULSE_RISE_MASK,
+	{ REMOTE_PULSE_LEADER | REMOTE_PULSE_RISE_MASK,
 		REMOTE_PULSE_2T,
 		REMOTE_PULSE_1T | REMOTE_PULSE_RISE_MASK,
 		REMOTE_PULSE_2T,
@@ -180,15 +179,6 @@ static int remote_decode_pulse(struct remote_pulse_t *pulse, struct remote_butto
 
 int Remote_Configuration(void)
 {
-	RCC_Configuration();
-	GPIO_Configuration();
-	EXTI_Configuration();
-	NVIC_Configuration();
-	Timer_Configuration(REMOTE_STATE_FREQ);
-
-	remote_queue = xQueueCreate(4, sizeof(struct remote_button_t));
-	assert_param(remote_queue);
-
 	xTaskCreate(remote_task, (signed portCHAR *)"Remote", configMINIMAL_STACK_SIZE , NULL, tskIDLE_PRIORITY + 1, &xRemoteTask);
 	assert_param(xRemoteTask);
 
@@ -786,6 +776,15 @@ void remote_task(void *pvParameters)
 
 	timer_queue = xQueueCreate(256, sizeof(uint16_t));
 	assert_param(timer_queue);
+
+	remote_queue = xQueueCreate(4, sizeof(struct remote_button_t));
+	assert_param(remote_queue);
+
+	RCC_Configuration();
+	GPIO_Configuration();
+	EXTI_Configuration();
+	NVIC_Configuration();
+	Timer_Configuration(REMOTE_STATE_FREQ);
 
 	for(;;)
 	{
